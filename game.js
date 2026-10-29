@@ -279,7 +279,7 @@ setInterval(() => {
   try { localStorage.setItem("capivara-status", JSON.stringify(st)); } catch {}
   if (WS && WS.readyState === 1) WS.send(JSON.stringify(st));
 }, 500);
-window.Game = { donate, onLike, toggleBot: () => toggleBot(), step: dt => update(dt), get botOn() { return BOT.on; }, get menu() { return MENU; }, get state() { return S; } };
+window.Game = { donate, onLike, toggleBot: () => toggleBot(), step: dt => update(dt), draw: () => render(), get botOn() { return BOT.on; }, get menu() { return MENU; }, get state() { return S; } };
 
 // painel admin.html na mesma máquina (funciona até abrindo os arquivos direto, sem servidor)
 addEventListener("storage", e => {
@@ -903,8 +903,8 @@ function cycleMap(d) {
   saveFromGame({ theme: list[(i + d + list.length) % list.length] }); refreshScenery(); Sound.play("coin");
 }
 function nudgeVolume(key, d) {
-  // passos exatos de 10% (sem erro de arredondamento do ponto flutuante)
-  const v = Sound.volumes, nv = Math.max(0, Math.min(10, Math.round(v[key] * 10 + 1e-6) + Math.sign(d))) / 10;
+  // passos exatos de 5% (sem erro de arredondamento do ponto flutuante), iguais aos controles do painel
+  const v = Sound.volumes, nv = Math.max(0, Math.min(20, Math.round(v[key] * 20 + 1e-6) + Math.sign(d))) / 20;
   Sound.setVolumes({ [key]: nv }); saveFromGame({ sound: { ...(C.sound || {}), ...Sound.volumes } });
   Sound.play(key === "sfx" ? "jump" : "coin");
 }
@@ -941,12 +941,22 @@ function menuKey(a) {
     if (a === "ok") { if (row === "mute") Sound.toggleMute(); else if (row === "back") menuGo("main"); }
   } else if (a === "ok") menuGo("main");
 }
+// as áreas de clique são registradas na ordem do desenho: a última que contém o ponto é a que está por cima
+// (ex.: o botão "+" fica em cima da linha "Música"; a linha só seleciona, o botão muda o volume)
+function hitAt(x, y, onlySelectable) {
+  for (let i = MENU.hits.length - 1; i >= 0; i--) {
+    const b = MENU.hits[i];
+    if (onlySelectable && b.sel === undefined) continue;
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b;
+  }
+  return null;
+}
 function menuClick(x, y) {
-  const h = MENU.hits.find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+  const h = hitAt(x, y, false);
   if (h) h.fn();
 }
 function menuHover(x, y) {
-  const h = MENU.hits.find(b => b.sel !== undefined && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+  const h = hitAt(x, y, true);
   if (h && MENU.sel !== h.sel) MENU.sel = h.sel;
 }
 function menuButton(x, y, w, h, label, selected, fn, sel, size = 34) {
