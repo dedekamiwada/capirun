@@ -12,18 +12,21 @@ const cv = document.getElementById("c"), g = cv.getContext("2d");
 const W = cv.width, H = cv.height;
 const LANE = 2.4, CAM_H = 5.4, F = W * 0.85, HORIZON = H * 0.27, PZ = 7.5, FAR = 120, WALL = LANE * 1.75;
 const TRAIN_H = 3.4, RAMP = 7;
-const BARRIERS = ["low", "mid", "high"]; // low: só por cima · high: só por baixo · mid: por cima ou por baixo
+const BARRIERS = ["low", "mid", "high"]; // low: só pulando · mid: pula por cima ou rola por baixo · high: só rolando por baixo
+// altura do topo de cada barreira: dá para pisar em cima (como um degrau), e a zona em z onde ela é sólida
+const BAR_TOP = { low: 1.0, mid: 1.35, high: 3.3 }, STEP = 0.7;
+const inBarZ = o => o.z <= PZ + 0.5 && o.z >= PZ - 0.8;
 
 // ---------- estado ----------
 let S;
 function reset() {
   S = {
     state: "menu", dist: 0, speed: C.startSpeed, coins: 0, t: 0,
-    lane: 0, x: 0, y: 0, vy: 0, floor: 0, grounded: true, roll: 0, invuln: 0, stumble: 0,
-    camX: 0, camY: CAM_H,
+    lane: 0, x: 0, y: 0, vy: 0, floor: 0, grounded: true, jumps: 1, roll: 0, invuln: 0, stumble: 0,
+    camX: 0, camY: CAM_H, camBase: 0,
     boardTime: 0, magnet: 0, double: 0, shield: 0,
     speedFx: 0, slowFx: 0, reverseFx: 0, darkFx: 0, likes: 0,
-    objs: [], nextSpawn: 30, popups: [], feed: [], parts: [], memeTimer: 6,
+    objs: [], queue: [], lastChunk: null, nextSpawn: 30, popups: [], feed: [], parts: [], memeTimer: 6,
     deco: [], over: [], amb: [], nextDeco: 0, nextOver: 0, decoReady: false, theme: null, banner: 0,
     paused: false, themeOrder: THEME_ORDER,
     look: 0, lookDir: 1, lookT: 0, nextLook: 4, mood: "", moodT: 0, alerts: [],
@@ -102,43 +105,98 @@ function box(x, y, zFront, w, h, d, col) {
 // ---------- geração ----------
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = a => a[Math.floor(Math.random() * a.length)];
-const solid = o => o.t === "train" || o.t === "ramp" || BARRIERS.includes(o.t);
-// a pista já tem algo sólido perto de z? (evita trens/barreiras sobrepostos)
-function laneBusy(lane, z0, z1 = z0) {
-  return S.objs.some(o => solid(o) && o.lane === lane && o.z - 4 < z1 && o.z + (o.d || 0.5) + 4 > z0);
-}
 function addTrain(lane, z, opts = {}) {
   const d = opts.d || rnd(14, 28);
   if (opts.ramp) { S.objs.push({ t: "ramp", lane, z, d: RAMP }); z += RAMP; }
   S.objs.push({ t: "train", lane, z, d, col: opts.col || pick(C.colors.train), num: opts.num || 100 + (Math.random() * 900 | 0), move: opts.move || 0 });
   if (opts.ramp) coinLine(lane, z + 2, Math.floor(d / 3), false, TRAIN_H);
 }
-function spawnRow(z) {
-  const open = [-1, 0, 1].filter(l => !laneBusy(l, z));
-  if (!open.length) return;
-  const free = pick(open); // sempre fica uma pista livre nesta linha
-  for (const l of open) {
-    if (l === free) { if (Math.random() < 0.6) coinLine(l, z, 6); continue; }
-    const r = Math.random();
-    if (r < 0.4) {
-      // trem em movimento só se a pista estiver vazia até o jogador (senão atravessaria outros objetos)
-      const clear = !S.objs.some(o => o.lane === l && o.z + (o.d || 0.5) > PZ - 2);
-      const move = clear && Math.random() < 0.3 ? rnd(6, 12) : 0;
-      addTrain(l, z, { move, ramp: !move && Math.random() < 0.45 });
-    } else if (r < 0.88) S.objs.push({ t: pick(BARRIERS), lane: l, z });
-    else coinLine(l, z, 5, true);
-  }
-  if (Math.random() < 0.08) S.objs.push({ t: "power", kind: pick(["board", "magnet", "double"]), lane: free, z: z + 3, y: 1 });
+function coinLine(lane, z, n, arc, base = 0, out = S.objs) {
+  for (let i = 0; i < n; i++) out.push({ t: "coin", lane, z: z + i * 2.2, y: base + (arc ? 1 + Math.sin(i / (n - 1) * Math.PI) * 2 : 0.8) });
 }
-function coinLine(lane, z, n, arc, base = 0) {
-  for (let i = 0; i < n; i++) S.objs.push({ t: "coin", lane, z: z + i * 2.2, y: base + (arc ? 1 + Math.sin(i / (n - 1) * Math.PI) * 2 : 0.8) });
+
+// ---------- blocos pré-desenhados (chunks.js) ----------
+// cada bloco vira uma lista de objetos; eles ficam numa fila e entram na pista quando chegam ao horizonte
+const CHUNKS = window.CHUNKS || [], CHUNK_STEP = 3.5, CHUNK_GAP = 4; // metros por linha · linhas de respiro entre blocos
+const BAR_CHAR = { L: "low", B: "mid", H: "high" };
+function buildChunk(ch, z0, k, mirror) {
+  const rows = ch.rows.slice().reverse(), out = []; // linha 0 = a mais perto
+  const zr = i => z0 + i * CHUNK_STEP * k;
+  for (let li = 0; li < 3; li++) {
+    const lane = (li - 1) * (mirror ? -1 : 1), col = rows.map(r => r[li] || ".");
+    for (let i = 0; i < col.length; i++) {
+      const c = col[i];
+      if ("RTtM".includes(c)) {
+        // trecho de vagão: rampa (R...) seguida de T/t, ou um vagão em movimento (M...)
+        let j = i; while (col[j] === "R") j++;
+        const ramp = j > i, moving = col[j] === "M";
+        let e = j; while (e < col.length && (moving ? col[e] === "M" : "Tt".includes(col[e]))) e++;
+        if (e === j) { i = j - 1; continue; } // rampa sem vagão depois: ignora
+        const zt = ramp ? zr(i) + RAMP : zr(j), d = zr(e) - zt;
+        if (ramp) out.push({ t: "ramp", lane, z: zr(i), d: RAMP });
+        out.push({ t: "train", lane, z: zt, d, col: pick(C.colors.train), num: 100 + (Math.random() * 900 | 0), move: moving ? rnd(6, 12) : 0 });
+        if (ramp) coinLine(lane, zt + 2, Math.floor(d / 3), false, TRAIN_H, out);
+        for (let q = j; q < e; q++) if (col[q] === "t") coinLine(lane, zr(q), 2, false, TRAIN_H, out);
+        i = e - 1;
+      } else if (BAR_CHAR[c.toUpperCase()]) {
+        out.push({ t: BAR_CHAR[c.toUpperCase()], lane, z: zr(i) });
+        if (c === "l" || c === "b") coinLine(lane, zr(i) - 4.4, 5, true, 0, out);
+        if (c === "h") coinLine(lane, zr(i) - 2.2, 3, false, 0, out);
+      } else if (c === "p" && Math.random() < 0.5) {
+        out.push({ t: "power", kind: pick(["board", "magnet", "double"]), lane, z: zr(i), y: 1 });
+      } else if (c === "c" || c === "p") coinLine(lane, zr(i), 2, false, 0, out);
+    }
+  }
+  return out;
+}
+// sorteia o próximo bloco: a dificuldade acompanha a velocidade (bate → fica mais lento → blocos mais fáceis)
+function spawnChunk() {
+  const lvl = Math.max(0, Math.min(1, (S.speed - C.startSpeed) / Math.max(1, C.maxSpeed - C.startSpeed)));
+  const maxTier = lvl < 0.15 ? 0 : lvl < 0.45 ? 1 : 2;
+  // mais rápido = blocos esticam, mas um pouco menos que a velocidade (o tempo entre obstáculos encurta)
+  const k = 1 + (Math.max(C.startSpeed, S.speed) / C.startSpeed - 1) * 0.75;
+  let pool = CHUNKS.filter(c => c.tier <= maxTier && c !== S.lastChunk);
+  if (!pool.length) pool = CHUNKS.filter(c => c.tier <= maxTier);
+  if (!pool.length) { S.nextSpawn = 30; return; }
+  const weight = c => c.tier === maxTier ? 2 : 1; // blocos do nível atual aparecem mais
+  let r = Math.random() * pool.reduce((a, c) => a + weight(c), 0), ch = pool[0];
+  for (const c of pool) { r -= weight(c); if (r <= 0) { ch = c; break; } }
+  S.lastChunk = ch;
+  S.queue.push(...buildChunk(ch, FAR + 1, k, Math.random() < 0.5));
+  S.queue.sort((a, b) => a.z - b.z);
+  S.nextSpawn = (ch.rows.length + CHUNK_GAP) * CHUNK_STEP * k;
+}
+// objetos da fila entram na pista ao chegar no horizonte. Um vagão em movimento é mais rápido que tudo,
+// então ele não pode alcançar o que está na frente dele na mesma pista antes daquilo sair da tela:
+// a velocidade dele é limitada para isso; se nem devagar der, ele fica parado
+function releaseQueue(dz) {
+  for (const o of S.queue) o.z -= dz;
+  while (S.queue.length && S.queue[0].z <= FAR) {
+    const o = S.queue.shift();
+    if (o.move) {
+      const v = S.speed * 0.7; // pior caso: público deixou o jogo mais lento
+      for (const p of S.objs) {
+        if (p.lane !== o.lane || p.z >= o.z) continue;
+        const end = p.z + (p.d || 0.5) + 1; // quando "end" metros passarem, p já saiu da tela
+        if (end > 0) o.move = Math.min(o.move, (o.z - end) * v / end);
+      }
+      if (o.move < 5) o.move = 0;
+    }
+    S.objs.push(o);
+  }
 }
 // altura do chão numa pista, na posição do jogador: trilho, rampa ou teto de trem
 // reach: só conta superfícies até essa altura (o que dá para pisar); trens já atravessados não contam
-function floorAt(lane, reach = Infinity) {
+// bars: inclui o topo das barreiras (dá para pisar em cima delas); a câmera ignora esses degraus
+function floorAt(lane, reach = Infinity, bars = true) {
   let f = 0;
   for (const o of S.objs) {
-    if (o.lane !== lane || o.passed || PZ < o.z || PZ > o.z + o.d) continue;
+    if (o.lane !== lane || o.passed) continue;
+    if (BARRIERS.includes(o.t)) {
+      if (bars && !o.hit && inBarZ(o) && BAR_TOP[o.t] <= reach) f = Math.max(f, BAR_TOP[o.t]);
+      continue;
+    }
+    if (!o.d || PZ < o.z || PZ > o.z + o.d) continue;
     const h = o.t === "train" ? TRAIN_H : o.t === "ramp" ? TRAIN_H * (PZ - o.z) / o.d : 0;
     if (h <= reach) f = Math.max(f, h);
   }
@@ -308,7 +366,9 @@ function act(a, fromBot) {
   if (a === "left") S.lane = Math.max(-1, S.lane - 1);
   if (a === "right") S.lane = Math.min(1, S.lane + 1);
   if (S.lane !== lane) { S.prevLane = lane; Sound.play("lane"); }
-  if (a === "up" && S.grounded) { S.vy = 13; S.roll = 0; S.grounded = false; Sound.play("jump"); }
+  // um pulo por vez que o pé encosta em algo: vale no chão e também no ar (ex.: caindo de um vagão
+  // sem ter pulado); quem já pulou só ganha outro quando pisar de novo (chão, trem ou barreira)
+  if (a === "up" && (S.grounded || S.jumps > 0)) { S.vy = 13; S.roll = 0; S.grounded = false; S.jumps = 0; Sound.play("jump"); }
   if (a === "down") { S.roll = 0.7; if (!S.grounded) S.vy = -25; Sound.play("roll"); }
 }
 // teclas configuráveis no painel (C.binds: ação → lista de e.code)
@@ -407,7 +467,7 @@ function humanBurst() {
 }
 // segundos até um trem bloquear a pista (0 = bloqueada agora, Infinity = livre)
 function laneDanger(lane) {
-  if (floorAt(lane) - S.y > 0.7) return 0;
+  if (floorAt(lane, Infinity, false) - S.y > STEP) return 0;
   let t = Infinity;
   for (const o of S.objs) {
     if (o.lane !== lane || o.t !== "train" || o.z <= PZ) continue;
@@ -511,9 +571,17 @@ function update(dt) {
   }
   for (const p of S.parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 900 * dt; p.life -= dt; }
   S.parts = S.parts.filter(p => p.life > 0);
-  // câmera atrás do jogador: acompanha a pista e a altura do chão (sobe junto no teto do trem)
+  // câmera atrás do jogador: acompanha a pista e a altura do personagem
+  // no chão (ou no teto do trem) fica na altura de onde ele pisa; no ar mantém essa altura enquanto
+  // ele estiver por perto, e segue o personagem quando ele cai abaixo dela (saiu do trem) ou sobe muito
+  // acima dela. Pisar no topo de uma barreira não mexe a câmera (seria um tranco a cada barreira)
   S.camX += (S.x - S.camX) * Math.min(1, dt * 8);
-  S.camY += (S.floor + CAM_H - S.camY) * Math.min(1, dt * 5);
+  if (S.state === "run") {
+    if (S.grounded) S.camBase = floorAt(Math.round(S.x / LANE), S.y + STEP, false);
+    else S.camBase = Math.max(S.y - 2.4, Math.min(S.camBase, S.y));
+  }
+  const camTarget = S.camBase + CAM_H;
+  S.camY += (camTarget - S.camY) * Math.min(1, dt * (camTarget < S.camY ? 8 : 6));
   S.banner = Math.max(0, S.banner - dt);
   // expressão do avatar e olhadinha por cima do ombro de vez em quando
   S.moodT = Math.max(0, S.moodT - dt);
@@ -533,11 +601,12 @@ function update(dt) {
   if (S.memeTimer <= 0) { S.memeTimer = rnd(8, 15); popup(pick(C.memes), "", "#fff"); }
 
   S.nextSpawn -= dz;
-  if (S.nextSpawn <= 0) { spawnRow(FAR); S.nextSpawn = rnd(18, 30) * (1 - (S.speed - C.startSpeed) / 100); }
+  if (S.nextSpawn <= 0) spawnChunk();
   for (const o of S.objs) {
     o.z -= dz + (o.move || 0) * dt;
     if (o.move && !o.honked && o.z < 60) { o.honked = true; Sound.play("horn"); }
   }
+  releaseQueue(dz);
   for (const d of S.deco) d.z -= dz;
   for (const o of S.over) o.z -= dz;
   S.deco = S.deco.filter(d => d.z + (d.d || 1) > 0);
@@ -560,11 +629,13 @@ function update(dt) {
       Sound.play("lane"); react("shock", 0.8);
     } else { crash(); wall.passed = true; }               // de frente: perde metros e atravessa piscando
   }
-  S.floor = floorAt(Math.round(S.x / LANE), S.y + 0.7);
+  S.floor = floorAt(Math.round(S.x / LANE), S.y + STEP);
   const wasGrounded = S.grounded;
   S.vy -= 38 * dt; S.y += S.vy * dt;
-  S.grounded = S.y <= S.floor;
-  if (S.grounded) { S.y = S.floor; S.vy = 0; }
+  // subindo no pulo e passando pelo topo de uma barreira: só "sobe o degrau", sem cortar o pulo
+  S.grounded = S.y <= S.floor && S.vy <= 0;
+  if (S.y < S.floor) S.y = S.floor;
+  if (S.grounded) { S.vy = 0; S.jumps = 1; }
   if (S.grounded && !wasGrounded) S.landT = 0.18; // aterrissou: amassa um pouquinho
   S.landT = Math.max(0, (S.landT || 0) - dt);
 
@@ -579,11 +650,12 @@ function update(dt) {
       }
       continue;
     }
-    if (!hitZ || o.lane !== pl || o.hit) continue;
-    const rolling = S.roll > 0 && S.y < 0.6;
-    if (o.t === "low" && S.y < 1.1) { o.hit = true; crash(); }                   // só pulando
-    if (o.t === "mid" && !rolling && S.y < 1.3) { o.hit = true; crash(); }       // pulando ou rolando
-    if (o.t === "high" && !rolling && S.y < 3.2) { o.hit = true; crash(); }      // só rolando
+    if (!BARRIERS.includes(o.t) || !inBarZ(o) || o.lane !== pl || o.hit) continue;
+    // barreiras têm física: quem chega perto do topo (pulando ou caindo) pisa em cima dela e segue,
+    // e pode até pular de novo lá de cima. Só bate quem chega de frente, baixo demais, sem estar rolando
+    // (a cerca baixa é fechada embaixo: rolar não adianta, só pulando ou pisando em cima)
+    const rolling = S.roll > 0 && S.y < 0.6 && o.t !== "low";
+    if (!rolling && S.y < BAR_TOP[o.t] - STEP) { o.hit = true; crash(); }
   }
   S.objs = S.objs.filter(o => !o.dead && o.z + (o.d || 1) > 0);
 
@@ -800,13 +872,13 @@ function drawObj(o) {
   const x = o.lane * LANE;
   if (o.t === "train") return drawTrain(o);
   if (o.t === "ramp") return drawRamp(o);
-  if (o.t === "low") {        // cerca baixa e fechada: só passa pulando
-    box(x, 0, o.z, 2, 1.0, 0.3, "#d8d8d8");
+  if (o.t === "low") {        // cerca baixa e fechada: só passa pulando (ou pisando em cima)
+    box(x, 0, o.z, 2, 1.0, 0.35, "#d8d8d8");
     stripes(x - 1, 0.1, x + 1, 0.95, o.z, "#e8525c", "#ffffff", 8);
     blink(x + 0.85, 1.12, o.z);
-  } else if (o.t === "mid") { // barra suspensa com vão embaixo: pula por cima ou rola por baixo
-    for (const lx of [-0.9, 0.9]) box(x + lx, 0, o.z + 0.05, 0.12, 1.35, 0.12, "#3b3f4a");
-    box(x, 0.85, o.z, 2, 0.5, 0.15, "#f2f2f2");
+  } else if (o.t === "mid") { // barra suspensa com vão embaixo: pula por cima, pisa em cima ou rola por baixo
+    for (const lx of [-0.9, 0.9]) box(x + lx, 0, o.z + 0.1, 0.12, 1.35, 0.12, "#3b3f4a");
+    box(x, 0.85, o.z, 2, 0.5, 0.35, "#f2f2f2");
     stripes(x - 1, 0.88, x + 1, 1.32, o.z, "#2f7df6", "#ffffff", 8);
     blink(x - 0.85, 1.48, o.z);
   } else if (o.t === "high") { // painel alto com vão embaixo: só passa rolando

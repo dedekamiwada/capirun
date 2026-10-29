@@ -7,7 +7,7 @@ const { WebSocketServer } = require("ws");
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".png": "image/png", ".json": "application/json", ".ico": "image/x-icon" };
 // só estes arquivos são servidos (o resto da pasta, como node_modules e dados salvos, fica de fora)
-const PUBLIC = new Set(["index.html", "admin.html", "config.js", "themes.js", "scenery.js", "characters.js", "sound.js", "game.js"]);
+const PUBLIC = new Set(["index.html", "admin.html", "config.js", "themes.js", "scenery.js", "characters.js", "sound.js", "chunks.js", "game.js"]);
 
 function startServer({ port = 8080, dataDir = __dirname, log = console.log } = {}) {
   const file = name => path.join(dataDir, name);

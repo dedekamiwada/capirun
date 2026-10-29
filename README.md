@@ -158,14 +158,18 @@ Tudo pode ser trocado no painel.
 
 - **3 pistas**: troque de pista para desviar dos trens. Os trens com **rampa** dão para subir e correr por cima, onde ficam moedas.
 - **Barreiras**:
-  - 🟥 cerca listrada vermelha e branca: **só pulando**;
-  - 🟦 barra azul suspensa: **pulando ou rolando por baixo**;
+  - 🟥 cerca listrada vermelha e branca: **só pulando** (rolar não adianta). Dá para **pisar em cima** dela;
+  - 🟦 barra azul suspensa: **pulando ou rolando por baixo**. Dá para **pisar em cima** dela (e pular de novo lá de cima), como no Subway Surfers;
   - 🟨 painel alto amarelo e preto: **só rolando por baixo**.
+  - Só perde metros quem bate **de frente**, baixo demais. Encostar no topo não conta como batida.
 - **Bater de frente** num trem ou numa barreira faz perder metros (configurável) e o personagem atravessa piscando. A prancha e o escudo protegem.
 - **Bater de lado** ao trocar de pista faz o personagem quicar de volta para a pista anterior, sem perder metros.
 - Só dá para subir num trem **pela rampa** ou caindo de cima.
 - **Power-ups na pista**: 🛹 prancha, 🧲 ímã e 2X moedas.
 - **Trens vindo na sua direção** buzinam antes de chegar.
+- **Pulo no ar**: um pulo por vez que o pé encosta em algo (chão, teto do trem ou topo de barreira). Caiu de um vagão sem ter pulado? Ainda dá para pular uma vez.
+- **Mapa em blocos**: a pista é montada com blocos pré-desenhados (`chunks.js`), sorteados e encaixados um depois do outro, às vezes espelhados. Todo bloco tem um caminho possível. Tem corredores de vagões, "segundo andar" pela rampa, escada de vagões, trens vindo na sua direção e combos do tipo troca de pista → pula → rola.
+- **Dificuldade**: cresce com a velocidade. No começo só saem blocos fáceis; depois entram os médios e, com o jogo rápido, os difíceis. Bater deixa o jogo mais lento e os blocos voltam a ficar mais fáceis.
 - **Vitória**: ao chegar na meta, ou por um presente de vitória instantânea. Depois de alguns segundos começa outra partida sozinha (configurável).
 
 ---
@@ -208,6 +212,7 @@ Também dá para abrir o `index.html` direto no navegador para testar o jogo sem
 | Arquivo | Conteúdo |
 |---|---|
 | `index.html`, `game.js` | O jogo (canvas): física, obstáculos, bot, menu, regras, alertas, efeitos e HUD. |
+| `chunks.js` | Os blocos pré-desenhados do mapa (vagões, barreiras, moedas e power-ups). |
 | `admin.html` | O painel de controle. |
 | `config.js` | Valores padrão: meta, velocidade, regras iniciais, atalhos, likes, teclas, tela e efeitos disponíveis. |
 | `themes.js` | Os países (cores, monumentos, decorações, enfeites e clima). |
@@ -222,6 +227,7 @@ Também dá para abrir o `index.html` direto no navegador para testar o jogo sem
 
 - **Novo país**: copie um bloco em `themes.js` e troque cores, `landmarks` e `props`.
 - **Novo personagem**: copie um bloco de `SKINS` em `characters.js` e combine cabeça, chapéu, roupa e acessórios.
+- **Novo bloco do mapa**: em `chunks.js`, copie um bloco e desenhe as linhas (a legenda está no topo do arquivo). A primeira linha é a mais longe. Garanta que sempre exista um caminho.
 - **Valores padrão**: `config.js` (o painel sobrepõe estes valores).
 
 Onde ficam os dados salvos: no app, em `%APPDATA%\Capivara Runner` (`settings.json`, `gifts.json`, `live.json` e `erro.log`, se houver erro). No modo `npm start`, na própria pasta do projeto. Esses arquivos estão no `.gitignore`.

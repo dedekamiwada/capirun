@@ -28,6 +28,7 @@
       "scenery.js",
       "characters.js",
       "sound.js",
+      "chunks.js",
       "game.js",
       "package.json"
     ],
