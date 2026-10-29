@@ -2,7 +2,7 @@
   "name": "capivara-runner",
   "productName": "Capivara Runner",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Endless runner interativo para TikTok LIVE",
   "main": "main.js",
   "scripts": {

@@ -357,14 +357,25 @@ function actionFor(code) {
 // abrir com ?bot=1 já liga o bot (útil na fonte de navegador do OBS)
 if (new URLSearchParams(location.search).get("bot") === "1") setTimeout(toggleBot, 300);
 let tx, ty;
-cv.addEventListener("pointerdown", e => { tx = e.clientX; ty = e.clientY; });
+cv.addEventListener("pointerdown", e => {
+  tx = e.clientX; ty = e.clientY;
+  // começou em cima de uma barra arrastável (volume): segue o dedo/mouse até soltar
+  if (S.state === "menu") {
+    const [x, y] = canvasPoint(e), h = hitAt(x, y, false);
+    if (h && h.drag) { MENU.dragging = h; h.drag(x); try { cv.setPointerCapture(e.pointerId); } catch {} }
+  }
+});
 // posição do toque/clique em coordenadas do canvas (ele é escalado para caber na janela)
 function canvasPoint(e) {
   const r = cv.getBoundingClientRect();
   return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height];
 }
-cv.addEventListener("pointermove", e => { if (S.state === "menu" || S.paused) menuHover(...canvasPoint(e)); });
+cv.addEventListener("pointermove", e => {
+  if (MENU.dragging) return MENU.dragging.drag(canvasPoint(e)[0]);
+  if (S.state === "menu" || S.paused) menuHover(...canvasPoint(e));
+});
 cv.addEventListener("pointerup", e => {
+  if (MENU.dragging) { const k = MENU.dragging.key; MENU.dragging = null; saveVolumes(k); return; } // soltou a barra: salva uma vez só
   if (S.state === "menu" || S.paused) return menuClick(...canvasPoint(e));
   const dx = e.clientX - tx, dy = e.clientY - ty;
   if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return act("up");
@@ -905,8 +916,15 @@ function cycleMap(d) {
 function nudgeVolume(key, d) {
   // passos exatos de 5% (sem erro de arredondamento do ponto flutuante), iguais aos controles do painel
   const v = Sound.volumes, nv = Math.max(0, Math.min(20, Math.round(v[key] * 20 + 1e-6) + Math.sign(d))) / 20;
-  Sound.setVolumes({ [key]: nv }); saveFromGame({ sound: { ...(C.sound || {}), ...Sound.volumes } });
-  Sound.play(key === "sfx" ? "jump" : "coin");
+  Sound.setVolumes({ [key]: nv }); saveVolumes(key);
+}
+// arrastando a barra: muda o volume na hora (de 5 em 5%) e só salva quando soltar
+function setVolumeAt(key, frac) {
+  Sound.setVolumes({ [key]: Math.round(Math.max(0, Math.min(1, frac)) * 20) / 20 });
+}
+function saveVolumes(key) {
+  saveFromGame({ sound: { ...(C.sound || {}), ...Sound.volumes } });
+  Sound.play((key || (MENU.dragging || {}).key) === "sfx" ? "jump" : "coin");
 }
 // itens do menu principal: aberto no meio de uma partida, ganha "Continuar" (sem perder a distância) e "Nova partida"
 function mainItems() {
@@ -1022,8 +1040,13 @@ function drawMenu() {
       text(label, 70, y + 4, 32, "#fff", "left");
       text(`${Math.round(v[k] * 100)}%`, W - 70, y + 4, 32, "#ffd23f", "right");
       const bx = 150, bw = W - 300;
+      // barra arrastável: clicar ou arrastar em qualquer ponto define o volume (área de toque mais alta que a barra)
+      MENU.hits.push({ x: bx - 14, y: y + 26, w: bw + 28, h: 56, sel: i, key: k, drag: px => { MENU.sel = i; setVolumeAt(k, (px - bx) / bw); } });
       rrect(bx, y + 44, bw, 20, 10, "rgba(255,255,255,.15)");
       if (v[k] > 0) rrect(bx, y + 44, Math.max(20, bw * v[k]), 20, 10, "#ffd23f");
+      const kx = bx + bw * v[k], dragging = MENU.dragging && MENU.dragging.key === k;
+      ell(kx, y + 54, dragging ? 20 : 16, dragging ? 20 : 16, "#fff"); // bolinha para arrastar
+      g.lineWidth = 3; g.strokeStyle = "#ffd23f"; g.beginPath(); g.arc(kx, y + 54, dragging ? 20 : 16, 0, 7); g.stroke();
       menuButton(60, y + 28, 70, 52, "−", false, () => { MENU.sel = i; nudgeVolume(k, -0.1); }, undefined, 34);
       menuButton(W - 130, y + 28, 70, 52, "+", false, () => { MENU.sel = i; nudgeVolume(k, 0.1); }, undefined, 34);
     });
