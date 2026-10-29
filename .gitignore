@@ -1,0 +1,11 @@
+# dependências e builds
+node_modules/
+release*/
+dist/
+
+# dados locais (configurações, catálogo de presentes e usuário da TikTok de quem roda)
+settings.json
+gifts.json
+live.json
+erro.log
+*.log

@@ -1,0 +1,985 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Painel da Live</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0e0d13; --surface: #16151d; --surface-2: #1d1c26; --surface-3: #262433;
+    --border: #2a2836; --border-strong: #3a3749;
+    --text: #f1eff8; --text-2: #b4b0c7; --text-3: #7d7893;
+    --accent: #ffcf3a; --accent-ink: #1d1600;
+    --hurt: #ff5c7c; --hurt-bg: rgba(255,92,124,.12);
+    --help: #34d98a; --help-bg: rgba(52,217,138,.12);
+    --info: #7aa7ff;
+    --radius: 14px; --radius-sm: 10px;
+    --shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px rgba(0,0,0,.25);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 14px/1.45 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+  button, input, select { font: inherit; color: inherit; }
+  svg { width: 16px; height: 16px; flex: none; }
+
+  /* ---------- barra superior ---------- */
+  .topbar { position: sticky; top: 0; z-index: 10; background: rgba(14,13,19,.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
+  .topbar-inner { max-width: 1280px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 20px; }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, #ffcf3a, #ff4fa3); display: grid; place-items: center; font-size: 18px; }
+  .brand b { display: block; font-size: 15px; font-weight: 700; }
+  .brand span { display: block; font-size: 12px; color: var(--text-3); }
+  .live { flex: 1; display: flex; align-items: center; gap: 14px; min-width: 0; justify-content: flex-end; }
+  .meter { flex: 0 1 320px; min-width: 140px; }
+  .meter-top { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-2); margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+  .meter-top b { color: var(--text); font-weight: 600; }
+  .bar { height: 6px; background: var(--surface-3); border-radius: 99px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--help), var(--accent)); border-radius: 99px; transition: width .4s ease; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 99px; font-size: 12px; font-weight: 500; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
+  .pill.ok .dot { background: var(--help); box-shadow: 0 0 0 3px rgba(52,217,138,.18); }
+  .pill.warn .dot { background: var(--accent); }
+  .pill.paused { color: var(--accent); border-color: rgba(255,207,58,.35); }
+
+  /* ---------- layout ---------- */
+  .page { max-width: 1280px; margin: 0 auto; padding: 24px; display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
+  .col { display: grid; gap: 20px; min-width: 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .card-head { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+  .card-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .card-head p { margin: 2px 0 0; font-size: 12.5px; color: var(--text-3); }
+  .card-head .spacer { flex: 1; }
+  .card-body { padding: 16px 20px 20px; }
+  .count { font-size: 12px; color: var(--text-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: 99px; padding: 1px 8px; }
+
+  /* ---------- botões ---------- */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface-2); cursor: pointer; font-weight: 500; transition: background .15s, border-color .15s, transform .05s; white-space: nowrap; }
+  .btn:hover { background: var(--surface-3); }
+  .btn:active { transform: translateY(1px); }
+  .btn:focus-visible, input:focus-visible, select:focus-visible, .theme:focus-visible, .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+  .btn.ghost:hover { background: var(--surface-2); color: var(--text); }
+  .btn.help { color: var(--help); border-color: rgba(52,217,138,.35); background: var(--help-bg); }
+  .btn.hurt { color: var(--hurt); border-color: rgba(255,92,124,.35); background: var(--hurt-bg); }
+  .btn.icon { width: 34px; padding: 0; }
+  .btn.lg { height: 44px; font-size: 15px; }
+  .btn.block { width: 100%; }
+
+  /* ---------- formulários ---------- */
+  .field { display: grid; gap: 6px; }
+  .field > span { font-size: 12px; font-weight: 500; color: var(--text-2); }
+  .input { height: 36px; width: 100%; background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 0 11px; transition: border-color .15s; min-width: 0; }
+  .input:hover { border-color: #4a4660; }
+  .input-wrap { position: relative; }
+  .input-wrap .suffix { position: absolute; right: 11px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--text-3); pointer-events: none; }
+  .input-wrap .input { padding-right: 30px; }
+  select.input { appearance: none; padding-right: 30px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%23b4b0c7' stroke-width='2'%3E%3Cpath d='m3 4.5 3 3 3-3'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; cursor: pointer; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  /* ---------- países ---------- */
+  .themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .theme { position: relative; text-align: left; padding: 0; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; overflow: hidden; transition: border-color .15s, transform .15s; }
+  .theme:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+  .theme .sky { height: 64px; position: relative; }
+  .theme canvas { position: absolute; left: 12px; bottom: -12px; width: 40px; height: 27px; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,.4); }
+  .theme .auto-ico { position: absolute; left: 12px; bottom: -12px; width: 40px; height: 27px; border-radius: 4px; background: var(--surface-3); display: grid; place-items: center; box-shadow: 0 2px 8px rgba(0,0,0,.4); }
+  .theme .meta { padding: 20px 12px 12px; }
+  .theme b { display: block; font-size: 13.5px; font-weight: 600; }
+  .theme small { display: block; font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
+  .theme .check { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: none; place-items: center; }
+  .theme .check svg { width: 13px; height: 13px; }
+  .theme[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .theme[aria-pressed="true"] .check { display: grid; }
+  .theme .now { position: absolute; top: 8px; left: 8px; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; padding: 2px 7px; border-radius: 99px; background: rgba(0,0,0,.45); color: #fff; display: none; }
+  .theme.current .now { display: block; }
+
+  /* ---------- regras ---------- */
+  .rules { display: grid; gap: 10px; }
+  .rule { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-areas: "gift gift coins act" "seg meters effect effect" "sound sound sound sound";
+    gap: 12px; align-items: end; padding: 14px 14px 14px 18px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); position: relative; }
+  .rule .f-gift { grid-area: gift; } .rule .f-coins { grid-area: coins; } .rule .rule-actions { grid-area: act; }
+  .rule .f-seg { grid-area: seg; } .rule .f-meters { grid-area: meters; } .rule .f-effect { grid-area: effect; }
+  .rule::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--hurt); }
+  .rule.help::before { background: var(--help); }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; height: 36px; padding: 3px; gap: 3px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+  .seg button { border: 0; border-radius: 7px; background: transparent; color: var(--text-3); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+  .seg button[aria-pressed="true"][data-v="hurt"] { background: var(--hurt-bg); color: var(--hurt); }
+  .seg button[aria-pressed="true"][data-v="help"] { background: var(--help-bg); color: var(--help); }
+  .rule-actions { display: flex; gap: 4px; align-items: center; }
+  .rule .f-sound { grid-area: sound; }
+  .amount-hint { font-size: 11.5px; color: var(--text-3); min-height: 14px; }
+  .sound-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .sound-row select { flex: 1 1 200px; width: auto; }
+  .sound-row label.btn { cursor: pointer; }
+  .sound-file { font-size: 12.5px; color: var(--text-2); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 8px; height: 36px; display: inline-flex; align-items: center; padding: 0 10px; }
+  /* números: sem as setinhas (que cobriam o valor) e com espaço para o sufixo */
+  input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+  input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .input-wrap .input { padding-right: 34px; }
+  /* atalhos e regras de likes */
+  .shortcuts { display: grid; gap: 10px; }
+  .sc { display: grid; grid-template-columns: 120px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: 10px; align-items: end; padding: 12px 12px 12px 16px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); position: relative; }
+  .sc::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--text-3); }
+  .sc.help::before { background: var(--help); } .sc.hurt::before { background: var(--hurt); } .sc.win::before { background: var(--accent); }
+  .sc .sc-sound { grid-column: 1 / -1; }
+  .sc .add-key, .sc .key { height: 36px; width: 100%; justify-content: center; font-size: 13px; }
+  .sc .key { padding: 0 10px; }
+  .sc-hint { grid-column: 1 / -1; margin: -2px 0 0; font-size: 12.5px; color: var(--text-3); }
+  .hud-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+  .wins { display: flex; align-items: center; gap: 6px; flex: none; }
+  .wins b { min-width: 34px; text-align: center; font-size: 18px; color: var(--accent); }
+  @media (max-width: 1100px) { .sc { grid-template-columns: 1fr 1fr; } .sc > :last-child { grid-column: 1 / -1; } }
+  .empty { padding: 28px; text-align: center; color: var(--text-3); border: 1px dashed var(--border-strong); border-radius: 12px; }
+  .note { margin: 14px 0 0; font-size: 12.5px; color: var(--text-3); display: flex; gap: 8px; }
+  .note svg { color: var(--info); margin-top: 1px; }
+  .note code { font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; color: var(--text-2); }
+
+  /* ---------- controle da partida ---------- */
+  .stack { display: grid; gap: 12px; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .row > * { flex: 1; }
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); }
+  .toggle-row b { display: block; font-weight: 600; font-size: 13.5px; }
+  .toggle-row small { display: block; color: var(--text-3); font-size: 12px; }
+  .switch { width: 42px; height: 24px; border-radius: 99px; background: var(--surface-3); border: 1px solid var(--border-strong); position: relative; cursor: pointer; flex: none; transition: background .15s; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .18s; }
+  .switch[aria-checked="true"] { background: var(--help); border-color: var(--help); }
+  .switch[aria-checked="true"]::after { transform: translateX(18px); }
+  .quick { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .quick .btn { height: 34px; padding: 0 6px; font-size: 12.5px; }
+  .divider { height: 1px; background: var(--border); margin: 4px 0; }
+  .label { font-size: 12px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border-strong); cursor: pointer; font-size: 12.5px; }
+  .chip:hover { border-color: var(--accent); }
+  .chip em { font-style: normal; color: var(--text-3); }
+  .muted { color: var(--text-3); font-size: 12.5px; margin: 0; }
+
+  /* ---------- aviso de salvo ---------- */
+  .toast { position: fixed; right: 20px; bottom: 20px; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px; background: var(--surface-3); border: 1px solid var(--border-strong); box-shadow: 0 10px 30px rgba(0,0,0,.4); font-weight: 500; opacity: 0; transform: translateY(8px); transition: opacity .2s, transform .2s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: none; }
+  .toast svg { color: var(--help); }
+
+  /* ---------- seletor de presente ---------- */
+  .gift-btn { display: flex; align-items: center; gap: 10px; height: 36px; width: 100%; padding: 0 10px 0 6px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--bg); cursor: pointer; text-align: left; min-width: 0; }
+  .gift-btn:hover { border-color: #4a4660; }
+  .gift-btn img, .gift-btn .any { width: 26px; height: 26px; border-radius: 6px; flex: none; object-fit: contain; background: var(--surface-3); }
+  .gift-btn .any { display: grid; place-items: center; font-size: 14px; }
+  .gift-btn b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gift-btn em { font-style: normal; color: var(--text-3); font-size: 12px; margin-left: auto; white-space: nowrap; }
+  .modal { position: fixed; inset: 0; z-index: 50; background: rgba(5,5,9,.7); backdrop-filter: blur(4px); display: grid; place-items: center; padding: 16px; }
+  .modal-box { width: min(860px, 100%); max-height: min(760px, 100%); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 16px; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+  .modal-head { display: flex; gap: 12px; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--border); }
+  .modal-head h3 { margin: 0; font-size: 15px; }
+  .modal-head .input { max-width: 280px; margin-left: auto; }
+  .gift-grid { overflow: auto; padding: 14px 18px 18px; display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
+  .gift { display: grid; justify-items: center; gap: 6px; padding: 12px 8px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; text-align: center; }
+  .gift:hover { border-color: var(--accent); }
+  .gift img { width: 56px; height: 56px; object-fit: contain; }
+  .gift .any { width: 56px; height: 56px; display: grid; place-items: center; font-size: 28px; }
+  .gift b { font-size: 12.5px; font-weight: 600; line-height: 1.2; }
+  .gift em { font-style: normal; font-size: 12px; color: var(--accent); }
+  .modal-empty { padding: 30px; text-align: center; color: var(--text-2); }
+
+  /* ---------- personagens ---------- */
+  .skins { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
+  .skin { position: relative; padding: 0; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; overflow: hidden; text-align: left; transition: border-color .15s, transform .15s; }
+  .skin:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+  .skin canvas { display: block; width: 100%; height: 120px; background: radial-gradient(circle at 50% 70%, #2c2a3b, #1a1923 70%); }
+  .skin .meta { padding: 10px 12px 12px; }
+  .skin b { display: block; font-size: 13px; font-weight: 600; }
+  .skin small { display: block; font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
+  .skin .check { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: none; place-items: center; }
+  .skin .check svg { width: 13px; height: 13px; }
+  .skin[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .skin[aria-pressed="true"] .check { display: grid; }
+
+  /* ---------- teclas ---------- */
+  .binds { display: grid; gap: 8px; }
+  .bind { display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: center; padding: 8px 10px 8px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+  .bind > span { font-weight: 500; }
+  .keys { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .key { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px 0 10px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border-strong); border-bottom-width: 2px; font-size: 12.5px; font-weight: 600; }
+  .key button { width: 20px; height: 20px; border: 0; border-radius: 5px; background: transparent; color: var(--text-3); cursor: pointer; display: grid; place-items: center; }
+  .key button:hover { background: var(--surface-3); color: var(--hurt); }
+  .key button svg { width: 12px; height: 12px; }
+  .add-key { height: 28px; padding: 0 10px; border-radius: 7px; border: 1px dashed var(--border-strong); background: transparent; color: var(--text-2); cursor: pointer; font-size: 12.5px; }
+  .add-key:hover { border-color: var(--accent); color: var(--text); }
+  .add-key.listening { border-style: solid; border-color: var(--accent); color: var(--accent); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+
+  .gb-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .gb-head b { font-size: 13.5px; font-weight: 600; }
+  .gbind { display: grid; grid-template-columns: 130px minmax(0, 1.6fr) 96px 84px minmax(0, 1.2fr) auto; gap: 10px; align-items: end; padding: 10px 10px 10px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+  .gbind .add-key { height: 36px; width: 100%; }
+  .gbind .key { height: 36px; width: 100%; justify-content: space-between; }
+  .gb-result { height: 36px; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: var(--radius-sm); font-size: 12.5px; font-weight: 600; background: var(--bg); border: 1px solid var(--border); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gb-result.hurt { color: var(--hurt); background: var(--hurt-bg); border-color: rgba(255,92,124,.3); }
+  .gb-result.help { color: var(--help); background: var(--help-bg); border-color: rgba(52,217,138,.3); }
+  @media (max-width: 1100px) { .gbind { grid-template-columns: 1fr 1fr auto; } .gbind .f-gb-gift, .gbind .f-gb-res { grid-column: 1 / -1; } }
+
+  /* ---------- TikTok ---------- */
+  .live-state { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); font-size: 13px; }
+  .live-state .dot { margin-top: 6px; flex: none; }
+  .live-state.ok .dot { background: var(--help); box-shadow: 0 0 0 3px rgba(52,217,138,.18); }
+  .live-state.busy .dot { background: var(--accent); animation: pulse 1s infinite; }
+  .live-state.err .dot { background: var(--hurt); }
+  .live-state b { display: block; }
+  .live-state small { display: block; color: var(--text-3); }
+  .at { position: relative; }
+  .at::before { content: "@"; position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--text-3); }
+  .at .input { padding-left: 26px; }
+
+  @media (min-width: 1600px) {
+    .rule { grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) minmax(0, 1.1fr) minmax(0, .8fr) minmax(0, 1.4fr) auto; grid-template-areas: "gift coins seg meters effect act" "sound sound sound sound sound sound"; }
+  }
+  @media (max-width: 1100px) { .page { grid-template-columns: 1fr; } }
+  @media (max-width: 640px) {
+    .topbar-inner, .page { padding-left: 16px; padding-right: 16px; }
+    .live .meter, .brand span { display: none; }
+    .rule { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; grid-template-areas: "gift gift act" "coins meters meters" "seg seg seg" "effect effect effect" "sound sound sound"; }
+    .quick { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <div class="logo">🦫</div>
+      <div><b>Capivara Runner</b><span>Painel da live · não capture esta janela</span></div>
+    </div>
+    <div class="live">
+      <div class="meter">
+        <div class="meter-top"><span id="mDist">— m</span><span id="mPct">0%</span></div>
+        <div class="bar"><i id="mBar"></i></div>
+      </div>
+      <span class="pill paused" id="pPaused" hidden>Pausado</span>
+      <span class="pill" id="pBot" hidden>Bot ativo</span>
+      <span class="pill" id="pConn"><span class="dot"></span><span id="pConnText">Aguardando o jogo</span></span>
+    </div>
+  </div>
+</header>
+
+<main class="page">
+  <div class="col">
+    <section class="card">
+      <div class="card-head">
+        <div><h2>País do cenário</h2><p>O caminho fica neste país até você trocar.</p></div>
+      </div>
+      <div class="card-body"><div class="themes" id="themes"></div></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div><h2>Personagem</h2><p>Quem corre na live. Troca na hora.</p></div></div>
+      <div class="card-body"><div class="skins" id="skins"></div></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div><h2>Regras de presentes</h2><p>O que cada presente faz no jogo.</p></div>
+        <span class="count" id="ruleCount">0</span>
+        <span class="spacer"></span>
+        <button class="btn help" id="addHelp" title="Cria uma regra que faz avançar 1000 m">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg>Ajuda +1000 m
+        </button>
+        <button class="btn primary" id="add">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v10M3 8h10"/></svg>Nova regra
+        </button>
+      </div>
+      <div class="card-body">
+        <div class="rules" id="rules"></div>
+        <p class="note">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v4M8 4.8v.2"/></svg>
+          <span>Vale a regra mais específica: primeiro as de um presente escolhido, depois a de maior valor mínimo. Os presentes vêm do catálogo oficial da TikTok (nome, imagem e ID exatos), carregado ao conectar na sua live.</span>
+        </p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div><h2>Teclas</h2><p>Clique em “+ tecla” e aperte a tecla desejada.</p></div>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="bindsReset">Padrão</button>
+      </div>
+      <div class="card-body stack">
+        <div class="binds" id="binds"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div><h2>Atalhos de teclado</h2><p>Aperte a tecla com a janela do jogo em foco e a ação acontece na hora (aparece na tela sem nome de ninguém).</p></div>
+        <span class="spacer"></span>
+        <button class="btn primary" id="addShortcut"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v10M3 8h10"/></svg>Novo atalho</button>
+      </div>
+      <div class="card-body"><div class="shortcuts" id="shortcuts"></div></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <div><h2>Likes</h2><p>A cada tantos likes, algo acontece no jogo. Cada regra conta separado.</p></div>
+        <span class="spacer"></span>
+        <button class="btn primary" id="addLikeRule"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v10M3 8h10"/></svg>Nova regra de likes</button>
+      </div>
+      <div class="card-body"><div class="shortcuts" id="likeRules"></div></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div><h2>Tela da live</h2><p>O que aparece no jogo. Desligue o que não quiser mostrar.</p></div></div>
+      <div class="card-body stack">
+        <div class="hud-grid" id="hudToggles"></div>
+        <div class="grid-2">
+          <label class="field" style="grid-column:1/-1"><span>🔊 Volume geral</span><div class="row"><input type="range" id="volMaster" min="0" max="100" step="5" style="flex:1"><b id="volMasterVal" style="flex:0 0 50px;text-align:right"></b></div></label>
+          <label class="field"><span>🎵 Volume da música</span><div class="row"><input type="range" id="volMusic" min="0" max="100" step="5" style="flex:1"><b id="volMusicVal" style="flex:0 0 50px;text-align:right"></b></div></label>
+          <label class="field"><span>💥 Volume dos efeitos</span><div class="row"><input type="range" id="volSfx" min="0" max="100" step="5" style="flex:1"><b id="volSfxVal" style="flex:0 0 50px;text-align:right"></b></div></label>
+        </div>
+        <label class="field"><span>Margem do topo (para não ficar embaixo do nome e dos espectadores da TikTok)</span>
+          <div class="row"><input type="range" id="hudTop" min="0" max="260" step="5" style="flex:1"><b id="hudTopVal" style="flex:0 0 70px;text-align:right"></b></div>
+        </label>
+      </div>
+    </section>
+  </div>
+
+  <aside class="col">
+    <section class="card">
+      <div class="card-head"><div><h2>TikTok LIVE</h2><p>Conecte depois de iniciar a live.</p></div></div>
+      <div class="card-body stack">
+        <div class="live-state" id="liveState"><span class="dot"></span><div><b id="liveTitle">Desconectado</b><small id="liveSub">Digite seu @ e conecte.</small></div></div>
+        <div class="row">
+          <div class="at" style="flex:1.4"><input class="input" id="liveUser" placeholder="seu_usuario" autocomplete="off" spellcheck="false"></div>
+          <button class="btn primary" id="liveBtn">Conectar</button>
+        </div>
+        <p class="muted" id="catalogInfo">Catálogo de presentes: ainda não carregado.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div><h2>Partida</h2><p>Controle em tempo real.</p></div></div>
+      <div class="card-body stack">
+        <button class="btn lg block primary" id="pause">
+          <svg viewBox="0 0 16 16" fill="currentColor" id="pauseIco"><rect x="4" y="3" width="3" height="10" rx="1"/><rect x="9" y="3" width="3" height="10" rx="1"/></svg>
+          <span id="pauseText">Pausar jogo</span>
+        </button>
+        <div class="toggle-row">
+          <div><b>Bot automático</b><small>Joga sozinho e nunca bate.</small></div>
+          <button class="switch" id="bot" role="switch" aria-checked="false" aria-label="Bot automático"></button>
+        </div>
+        <div class="toggle-row">
+          <div><b>🏆 Vitórias da sessão</b><small>Aparece na tela do jogo.</small></div>
+          <div class="wins">
+            <button class="btn icon" id="winsMinus" aria-label="Menos uma vitória">−</button>
+            <b id="winsVal">0</b>
+            <button class="btn icon" id="winsPlus" aria-label="Mais uma vitória">+</button>
+            <button class="btn ghost" id="winsZero">Zerar</button>
+          </div>
+        </div>
+        <button class="btn block" id="openMenu">🏠 Abrir menu do jogo</button>
+        <button class="btn block ghost" id="restart">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3"/></svg>Reiniciar partida
+        </button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div><h2>Testar</h2><p>Simula eventos sem precisar de live.</p></div></div>
+      <div class="card-body stack">
+        <span class="label">Atrapalhar (moedas)</span>
+        <div class="quick">
+          <button class="btn hurt" data-coins="1">1</button><button class="btn hurt" data-coins="10">10</button>
+          <button class="btn hurt" data-coins="100">100</button><button class="btn hurt" data-coins="1000">1000</button>
+        </div>
+        <div class="row">
+          <button class="btn help" id="tHelp">Ajuda +1000 m</button>
+          <button class="btn" id="tLikes">Likes</button>
+        </div>
+        <div class="divider"></div>
+        <span class="label">Presente específico</span>
+        <button class="gift-btn" id="tGift" type="button"></button>
+        <button class="btn block" id="tSend">Enviar presente de teste</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div><h2>Presentes recebidos</h2><p>Clique para criar uma regra.</p></div></div>
+      <div class="card-body"><div class="chips" id="recent"><p class="muted" id="recentEmpty">Os presentes da live aparecem aqui (com o Iniciar.bat aberto).</p></div></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div><h2>Configurações</h2><p>Meta e penalidades.</p></div></div>
+      <div class="card-body grid-2">
+        <label class="field"><span>Meta</span><div class="input-wrap"><input class="input" type="number" id="goalMeters" min="100" step="100"><span class="suffix">m</span></div></label>
+        <label class="field"><span>Volta ao bater</span><div class="input-wrap"><input class="input" type="number" id="crashPenaltyMeters" min="0"><span class="suffix">m</span></div></label>
+        <label class="field" style="grid-column:1/-1"><span>Nova partida após a vitória (0 = não reinicia)</span><div class="input-wrap"><input class="input" type="number" id="autoRestartSec" min="0"><span class="suffix">s</span></div></label>
+      </div>
+    </section>
+
+    <button class="btn ghost" id="reset">Restaurar configurações padrão</button>
+  </aside>
+</main>
+
+<div class="toast" id="toast"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m3.5 8.5 3 3 6-7"/></svg><span id="toastText">Salvo</span></div>
+
+<div class="modal" id="giftModal" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="giftModalTitle">
+    <div class="modal-head">
+      <h3 id="giftModalTitle">Escolher presente</h3>
+      <input class="input" id="giftSearch" placeholder="Buscar presente…" autocomplete="off">
+      <button class="btn icon ghost" id="giftClose" aria-label="Fechar">✕</button>
+    </div>
+    <div class="gift-grid" id="giftGrid"></div>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="themes.js"></script>
+<script src="scenery.js"></script>
+<script src="characters.js"></script>
+<script src="sound.js"></script>
+<script>
+const KEY = "capivara-settings", FIELDS = ["goalMeters", "crashPenaltyMeters", "autoRestartSec"];
+const http = location.protocol.startsWith("http");
+const $ = id => document.getElementById(id);
+const ICON = {
+  play: '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.2v9.6a.6.6 0 0 0 .9.5l7.6-4.8a.6.6 0 0 0 0-1L5.9 2.7a.6.6 0 0 0-.9.5Z"/></svg>',
+  pause: '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="4" y="3" width="3" height="10" rx="1"/><rect x="9" y="3" width="3" height="10" rx="1"/></svg>',
+  trash: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>',
+  check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m3.5 8.5 3 3 6-7"/></svg>',
+  shuffle: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 4.5h2.5c3.5 0 3.5 7 7 7H14M12 9.5l2 2-2 2M2 11.5h2.5c1.2 0 2-.8 2.6-1.8M9 6.3c.6-1 1.4-1.8 2.5-1.8H14M12 2.5l2 2-2 2"/></svg>'
+};
+
+const defaults = () => ({
+  ...Object.fromEntries(FIELDS.map(k => [k, CONFIG[k]])), donationRules: CONFIG.donationRules.map(r => ({ ...r })), theme: "",
+  skin: CONFIG.skin, binds: JSON.parse(JSON.stringify(CONFIG.binds)), shortcuts: JSON.parse(JSON.stringify(CONFIG.shortcuts)), likeRules: JSON.parse(JSON.stringify(CONFIG.likeRules)),
+  hud: { ...CONFIG.hud }, hudTop: CONFIG.hudTop
+});
+let settings = defaults();
+try { Object.assign(settings, JSON.parse(localStorage.getItem(KEY)) || {}); } catch {}
+// configurações de versões antigas: "atalhos de presente" viram atalhos; "likes por recuo" vira uma regra de likes
+function migrate(st) {
+  if (!Array.isArray(st.shortcuts)) st.shortcuts = (st.giftBinds || []).length ? st.giftBinds.map(b => ({ ...b, kind: "gift" })) : JSON.parse(JSON.stringify(CONFIG.shortcuts));
+  if (!Array.isArray(st.likeRules)) st.likeRules = st.likesPerPushback > 0 ? [{ every: st.likesPerPushback, meters: st.likePushbackMeters || 0, effect: "" }] : JSON.parse(JSON.stringify(CONFIG.likeRules));
+  delete st.giftBinds; delete st.testKeys; delete st.likesPerPushback; delete st.likePushbackMeters;
+  return st;
+}
+migrate(settings);
+let status = null;
+
+// ---------- comunicação com o jogo ----------
+let ws = null;
+// o comando vai por dois caminhos (navegador e servidor) para chegar ao jogo em qualquer situação;
+// o "id" único faz o jogo aplicar só uma vez
+function send(cmd) {
+  cmd = { ...cmd, id: Date.now().toString(36) + Math.random().toString(36).slice(2) };
+  try { localStorage.setItem("capivara-cmd", JSON.stringify(cmd)); } catch {}
+  if (http) fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cmd) }).catch(() => {});
+}
+let toastTimer;
+function toast(t) { $("toastText").textContent = t; $("toast").classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => $("toast").classList.remove("show"), 1600); }
+let saveTimer;
+function save() {
+  if (typeof refreshGiftBindResults === "function") refreshGiftBindResults(); // regras mudaram → atualiza o "Resultado" dos atalhos
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch {}
+    if (!http) return toast("Salvo");
+    fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) })
+      .then(r => toast(r.ok ? "Salvo" : "Erro ao salvar no servidor")).catch(() => toast("Salvo só neste navegador"));
+  }, 250);
+}
+
+// ---------- status ao vivo ----------
+let lastStatus = 0;
+function onStatus(s) {
+  status = s; lastStatus = Date.now();
+  const pct = s.goal ? Math.min(100, s.dist / s.goal * 100) : 0;
+  $("mDist").innerHTML = `<b>${s.dist.toLocaleString("pt-BR")} m</b> de ${s.goal.toLocaleString("pt-BR")}`;
+  $("mPct").textContent = pct.toFixed(1) + "%";
+  $("mBar").style.width = pct + "%";
+  $("pPaused").hidden = !s.paused;
+  $("pBot").hidden = !s.bot;
+  $("winsVal").textContent = s.wins || 0;
+  $("bot").setAttribute("aria-checked", s.bot);
+  $("pauseText").textContent = s.paused ? "Continuar jogo" : "Pausar jogo";
+  $("pause").firstElementChild.outerHTML = s.paused ? ICON.play : ICON.pause;
+  $("pause").disabled = s.state !== "run";
+  document.querySelectorAll(".theme").forEach(el => el.classList.toggle("current", el.dataset.name === s.theme && !settings.theme));
+  connPill(true);
+}
+function connPill(ok) {
+  $("pConn").className = "pill " + (ok ? "ok" : "warn");
+  $("pConnText").textContent = ok ? (http ? "Jogo conectado" : "Jogo conectado (local)") : "Jogo não encontrado";
+}
+setInterval(() => { if (Date.now() - lastStatus > 2500) connPill(false); }, 1000);
+addEventListener("storage", e => {
+  if (e.key === "capivara-status" && e.newValue) try { onStatus(JSON.parse(e.newValue)); } catch {}
+  // menu do jogo mudou personagem, mapa ou volume (mesmo navegador, sem servidor)
+  if (e.key === KEY && e.newValue) try { const s = JSON.parse(e.newValue); for (const k of ["skin", "theme", "sound"]) if (s[k] !== undefined) settings[k] = s[k]; renderThemes(); renderSkins(); renderHud(); } catch {}
+});
+try { const s = JSON.parse(localStorage.getItem("capivara-status")); if (s) onStatus(s); } catch {}
+
+// ---------- países ----------
+const LANDMARK_PT = {
+  pagoda: "pagodes", tower: "torre", skyscraper: "arranha-céus", colosseum: "coliseu", dome: "cúpulas", campanile: "campanários",
+  eiffel: "torre de ferro", haussmann: "prédios clássicos", mountain: "monte nevado", sugarloaf: "morros", favela: "casinhas coloridas",
+  pyramid: "pirâmides", obelisk: "obeliscos", windmill: "moinhos", canalHouses: "casas de canal"
+};
+function renderThemes() {
+  const box = $("themes"); box.innerHTML = "";
+  const items = [{ name: "auto", label: "Automático", sub: `Troca a cada ${(window.THEME_LENGTH || 2000).toLocaleString("pt-BR")} m` },
+    ...THEMES.map(t => ({ name: t.name, label: t.name, sub: [...new Set(t.landmarks)].slice(0, 2).map(l => LANDMARK_PT[l] || l).join(" · "), t }))];
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.className = "theme"; b.dataset.name = it.name;
+    b.setAttribute("aria-pressed", settings.theme === it.name);
+    const sky = it.t ? `linear-gradient(180deg, ${it.t.sky[0]}, ${it.t.sky[1]} 70%, ${it.t.sky[2]})` : "linear-gradient(135deg, #3a1f5c, #e0566a 40%, #1e8fd0 75%, #ff8fc0)";
+    b.innerHTML = `<div class="sky" style="background:${sky}">${it.t ? "<canvas width='80' height='54'></canvas>" : `<div class="auto-ico">${ICON.shuffle}</div>`}</div>
+      <span class="now">Agora</span><span class="check">${ICON.check}</span>
+      <div class="meta"><b>${it.label}</b><small>${it.sub}</small></div>`;
+    if (it.t) { const c = b.querySelector("canvas").getContext("2d"); Scenery.flag(c, 2, 2, 76, 50, it.t.flag); }
+    b.onclick = () => { settings.theme = it.name; renderThemes(); save(); };
+    box.appendChild(b);
+  }
+  if (status) onStatus(status);
+}
+
+// ---------- regras ----------
+function effectOptions(sel) {
+  const group = (kind, label) => `<optgroup label="${label}">` + Object.entries(EFFECTS).filter(([, e]) => e.kind === kind)
+    .map(([k, e]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${e.label}</option>`).join("") + "</optgroup>";
+  return `<option value="" ${!sel ? "selected" : ""}>Sem efeito extra</option>` + group("hurt", "Atrapalhar") + group("help", "Ajudar");
+}
+function renderRules() {
+  const list = $("rules"); list.innerHTML = "";
+  $("ruleCount").textContent = settings.donationRules.length;
+  if (!settings.donationRules.length) list.innerHTML = '<div class="empty">Nenhuma regra ainda. Crie uma para os presentes mexerem no jogo.</div>';
+  settings.donationRules.forEach((r, i) => {
+    const m = Number(r.meters) || 0, specific = !!(r.giftId || r.gift);
+    const el = document.createElement("div");
+    el.className = "rule" + (m < 0 ? " help" : "");
+    el.innerHTML = `
+      <div class="field f-gift"><span>Presente</span><button class="gift-btn" type="button" data-a="gift">${giftButtonHTML(r)}</button></div>
+      <label class="field f-coins"><span>${specific ? "Quantidade mínima" : "A partir de"}</span><div class="input-wrap"><input class="input" type="number" min="${specific ? 1 : 0}" data-k="amount"><span class="suffix">${specific ? "×" : "🪙"}</span></div><small class="amount-hint"></small></label>
+      <div class="field f-seg"><span>Ação</span><div class="seg"><button type="button" data-v="hurt">Atrapalhar</button><button type="button" data-v="help">Ajudar</button></div></div>
+      <label class="field f-meters"><span data-l="m">${m < 0 ? "Avança" : "Volta"}</span><div class="input-wrap"><input class="input" type="number" min="0" data-k="abs"><span class="suffix">m</span></div></label>
+      <label class="field f-effect"><span>Efeito</span><select class="input" data-k="effect">${effectOptions(r.effect || "")}</select></label>
+      <div class="field f-sound"><span>Som na live</span>
+        <div class="sound-row">
+          <select class="input" data-k="sound"${r.soundData ? " disabled" : ""}>${Sound.LIBRARY.map(([id, label]) => `<option value="${id}" ${id === (r.sound || "") ? "selected" : ""}>${label}</option>`).join("")}</select>
+          <button class="btn icon" type="button" data-a="hear" title="Ouvir" aria-label="Ouvir o som">${ICON.play}</button>
+          ${r.soundData
+            ? `<span class="sound-file" title="${esc(r.soundName || "")}">🎵 ${esc((r.soundName || "arquivo próprio").slice(0, 22))}</span><button class="btn ghost" type="button" data-a="unfile">Remover arquivo</button>`
+            : `<label class="btn ghost" title="MP3, WAV ou OGG de até 1 MB">Enviar arquivo<input type="file" accept="audio/*" data-a="file" hidden></label>`}
+        </div>
+      </div>
+      <div class="rule-actions">
+        <button class="btn icon ghost" data-a="test" title="Testar esta regra" aria-label="Testar">${ICON.play}</button>
+        <button class="btn icon ghost" data-a="del" title="Excluir regra" aria-label="Excluir">${ICON.trash}</button>
+      </div>`;
+    const q = s => el.querySelector(s);
+    // presente escolhido: quantidade daquele presente (ex.: 5× Rosa num combo); qualquer presente: valor em moedas
+    const amountHint = () => { q(".amount-hint").textContent = specific && r.giftCoins ? `= ${fmt((r.minCount || 1) * r.giftCoins)} 🪙` : ""; };
+    q("[data-k=amount]").value = specific ? (r.minCount || 1) : (r.minCoins || 0);
+    amountHint();
+    q('[data-a=gift]').onclick = () => pickGift(gift => {
+      Object.assign(r, giftFields(gift));
+      if (gift) { r.minCount = r.minCount || 1; r.minCoins = r.minCount * (gift.coins || 1); } else { delete r.minCount; r.minCoins = r.minCoins || 1; }
+      renderRules(); save();
+    });
+    q('[data-k=abs]').value = Math.abs(m);
+    const setDir = dir => {
+      el.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === dir));
+      el.classList.toggle("help", dir === "help");
+      q('[data-l=m]').textContent = dir === "help" ? "Avança" : "Volta";
+    };
+    setDir(m < 0 ? "help" : "hurt");
+    const sync = () => {
+      const dir = q('.seg [aria-pressed="true"]').dataset.v, abs = Math.max(0, Number(q('[data-k=abs]').value) || 0);
+      const amount = Number(q("[data-k=amount]").value) || 0;
+      if (specific) { r.minCount = Math.max(1, Math.floor(amount)); r.minCoins = r.minCount * (r.giftCoins || 1); }
+      else r.minCoins = Math.max(0, amount);
+      amountHint();
+      r.meters = dir === "help" ? -abs : abs;
+      r.effect = q('[data-k=effect]').value;
+      r.sound = q('[data-k=sound]').value;
+      save();
+    };
+    // som: ouvir, enviar arquivo próprio (guardado nas configurações) ou voltar para a biblioteca
+    q('[data-a=hear]').onclick = () => {
+      if (r.soundData) Sound.playCustom(r.soundData);
+      else Sound.play(q('[data-k=sound]').value || ((Number(r.meters) || 0) < 0 || r.effect === "win" ? (r.effect === "win" ? "fanfare" : "power") : "donate"), 2);
+    };
+    const file = q('[data-a=file]');
+    if (file) file.onchange = () => {
+      const f = file.files[0];
+      if (!f) return;
+      if (f.size > 1024 * 1024) return toast("Arquivo grande demais (máx. 1 MB)");
+      const rd = new FileReader();
+      rd.onload = () => { r.soundData = rd.result; r.soundName = f.name; renderRules(); save(); Sound.playCustom(r.soundData); };
+      rd.readAsDataURL(f);
+    };
+    const unfile = q('[data-a=unfile]');
+    if (unfile) unfile.onclick = () => { delete r.soundData; delete r.soundName; renderRules(); save(); };
+    el.querySelectorAll(".seg button").forEach(b => b.onclick = () => { setDir(b.dataset.v); sync(); });
+    el.querySelectorAll("input:not([type=file]),select").forEach(x => x.addEventListener("input", sync));
+    q('[data-a=del]').onclick = () => { settings.donationRules.splice(i, 1); renderRules(); save(); };
+    q('[data-a=test]').onclick = () => { send({ type: "gift", sim: true, gift: r.gift || "", giftId: r.giftId || "", img: r.giftImg || "", coins: specific ? (r.minCount || 1) * (r.giftCoins || 1) : Math.max(1, r.minCoins || 1), count: specific ? (r.minCount || 1) : undefined, ruleIndex: i }); toast("Teste enviado"); };
+    list.appendChild(el);
+  });
+}
+function addRule(rule) { settings.donationRules.unshift(rule); renderRules(); save(); }
+
+// ---------- catálogo oficial de presentes (vem da TikTok ao conectar na live) ----------
+let catalog = [];
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const giftFields = g => g ? { giftId: g.id, gift: g.name, giftImg: g.img, giftCoins: g.coins } : { giftId: "", gift: "", giftImg: "", giftCoins: 0 };
+function giftButtonHTML(r) {
+  if (!r.giftId && !r.gift) return `<span class="any">🎁</span><b>Qualquer presente</b><em>trocar</em>`;
+  const img = r.giftImg ? `<img src="${esc(r.giftImg)}" alt="" referrerpolicy="no-referrer">` : `<span class="any">🎁</span>`;
+  return `${img}<b>${esc(r.gift)}</b><em>${r.giftCoins ? r.giftCoins + " 🪙" : ""}</em>`;
+}
+function loadCatalog() {
+  if (!http) { $("catalogInfo").textContent = "Abra pelo app (CapivaraRunner.exe) para conectar e carregar o catálogo."; return; }
+  fetch("/api/gifts").then(r => r.json()).then(d => {
+    catalog = d.gifts || [];
+    $("catalogInfo").textContent = catalog.length
+      ? `Catálogo oficial: ${catalog.length} presentes (atualizado ${new Date(d.updated).toLocaleString("pt-BR")}).`
+      : "Catálogo de presentes: conecte na sua live uma vez para carregar.";
+  }).catch(() => {});
+}
+let pickCb = null;
+function pickGift(cb, allowAny = true) {
+  pickCb = cb; pickGift.allowAny = allowAny;
+  $("giftSearch").value = ""; renderGiftGrid(); $("giftModal").hidden = false; $("giftSearch").focus();
+}
+function renderGiftGrid() {
+  const q = $("giftSearch").value.trim().toLowerCase(), grid = $("giftGrid");
+  if (!catalog.length) {
+    grid.innerHTML = `<div class="modal-empty" style="grid-column:1/-1">O catálogo ainda não foi carregado.<br>Inicie sua live, conecte no cartão <b>TikTok LIVE</b> e os presentes oficiais aparecem aqui com imagem e valor.</div>`;
+    if (pickGift.allowAny) grid.insertAdjacentHTML("afterbegin", `<button class="gift" data-any><span class="any">🎁</span><b>Qualquer presente</b><em>—</em></button>`);
+  } else {
+    const list = catalog.filter(g => !q || g.name.toLowerCase().includes(q));
+    grid.innerHTML = (pickGift.allowAny && !q ? `<button class="gift" data-any><span class="any">🎁</span><b>Qualquer presente</b><em>—</em></button>` : "") +
+      list.map(g => `<button class="gift" data-id="${esc(g.id)}" title="ID ${esc(g.id)}"><img src="${esc(g.img)}" alt="" loading="lazy" referrerpolicy="no-referrer"><b>${esc(g.name)}</b><em>${g.coins} 🪙</em></button>`).join("");
+  }
+  grid.querySelectorAll(".gift").forEach(b => b.onclick = () => {
+    const g = b.dataset.any !== undefined ? null : catalog.find(x => x.id === b.dataset.id);
+    $("giftModal").hidden = true; pickCb && pickCb(g);
+  });
+}
+$("giftSearch").oninput = renderGiftGrid;
+$("giftClose").onclick = () => { $("giftModal").hidden = true; };
+$("giftModal").onclick = e => { if (e.target === $("giftModal")) $("giftModal").hidden = true; };
+addEventListener("keydown", e => { if (e.key === "Escape" && !$("giftModal").hidden) $("giftModal").hidden = true; });
+
+// presente usado no "Enviar presente de teste"
+let testGift = null;
+const renderTestGift = () => { $("tGift").innerHTML = giftButtonHTML(giftFields(testGift)); };
+$("tGift").onclick = () => pickGift(g => { testGift = g; renderTestGift(); });
+
+// ---------- conexão com a TikTok LIVE ----------
+let liveState = "idle";
+const LIVE_UI = {
+  idle: ["", "Desconectado", "Digite seu @ e conecte depois de iniciar a live."],
+  connecting: ["busy", "Conectando…", "Procurando sua live na TikTok."],
+  reconnecting: ["busy", "Reconectando…", "A conexão caiu, tentando de novo."],
+  connected: ["ok", "Conectado", ""],
+  ended: ["err", "Live encerrada", ""],
+  error: ["err", "Não conectou", ""]
+};
+function onLive(s) {
+  liveState = s.state;
+  const [cls, title, sub] = LIVE_UI[s.state] || LIVE_UI.idle;
+  $("liveState").className = "live-state " + cls;
+  $("liveTitle").textContent = s.state === "connected" ? `Conectado à live de @${s.username}` : title;
+  $("liveSub").textContent = s.error || (s.state === "connected" ? "Presentes, likes e follows já mexem no jogo." : sub);
+  if (s.username && !$("liveUser").value) $("liveUser").value = s.username;
+  const on = ["connected", "connecting", "reconnecting"].includes(s.state);
+  $("liveBtn").textContent = on ? "Desconectar" : "Conectar";
+  $("liveBtn").className = "btn " + (on ? "" : "primary");
+}
+$("liveBtn").onclick = () => {
+  if (!http) return toast("Abra pelo app para conectar");
+  const on = ["connected", "connecting", "reconnecting"].includes(liveState);
+  fetch(on ? "/api/live/disconnect" : "/api/live/connect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: $("liveUser").value }) })
+    .then(r => r.json()).then(onLive).catch(() => toast("Servidor não respondeu"));
+};
+$("liveUser").onkeydown = e => { if (e.key === "Enter") $("liveBtn").click(); };
+if (http) fetch("/api/live").then(r => r.json()).then(onLive).catch(() => {});
+else onLive({ state: "error", error: "Abra pelo app (CapivaraRunner.exe) ou pelo Iniciar.bat para conectar na TikTok." });
+
+// ---------- personagens ----------
+function renderSkins() {
+  const box = $("skins"); box.innerHTML = "";
+  for (const sk of Characters.SKINS) {
+    const b = document.createElement("button");
+    b.className = "skin"; b.setAttribute("aria-pressed", (settings.skin || Characters.SKINS[0].id) === sk.id);
+    b.innerHTML = `<canvas width="260" height="240"></canvas><span class="check">${ICON.check}</span><div class="meta"><b>${esc(sk.name)}</b><small>${esc(sk.desc)}</small></div>`;
+    b.onclick = () => { settings.skin = sk.id; renderSkins(); save(); };
+    box.appendChild(b);
+    Characters.preview(b.querySelector("canvas"), sk);
+  }
+}
+// prévias animadas
+setInterval(() => document.querySelectorAll(".skin canvas").forEach((c, i) => Characters.preview(c, Characters.SKINS[i], performance.now() / 1000)), 50);
+
+// ---------- teclas ----------
+const ACTIONS = { left: "Esquerda", right: "Direita", up: "Pular", down: "Abaixar / rolar", pause: "Pausar", bot: "Ligar/desligar bot", mute: "Som liga/desliga" };
+const KEY_NAMES = { ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", ArrowDown: "↓", Space: "Espaço", Escape: "Esc", Enter: "Enter", Tab: "Tab",
+  ShiftLeft: "Shift esq.", ShiftRight: "Shift dir.", ControlLeft: "Ctrl esq.", ControlRight: "Ctrl dir.", AltLeft: "Alt", Backspace: "Backspace" };
+const keyName = c => KEY_NAMES[c] || c.replace(/^Key/, "").replace(/^Digit/, "").replace(/^Numpad/, "Num ");
+let listening = null;
+function renderBinds() {
+  const box = $("binds"); box.innerHTML = "";
+  settings.binds = settings.binds || JSON.parse(JSON.stringify(CONFIG.binds));
+  for (const [act, label] of Object.entries(ACTIONS)) {
+    const codes = settings.binds[act] || (settings.binds[act] = []);
+    const row = document.createElement("div"); row.className = "bind";
+    row.innerHTML = `<span>${label}</span><div class="keys">${codes.map((c, i) => `<span class="key">${esc(keyName(c))}<button data-i="${i}" aria-label="Remover ${esc(keyName(c))}"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 3 6 6M9 3 3 9"/></svg></button></span>`).join("")}<button class="add-key">${listening === act ? "Aperte uma tecla…" : "+ tecla"}</button></div>`;
+    if (listening === act) row.querySelector(".add-key").classList.add("listening");
+    row.querySelectorAll(".key button").forEach(b => b.onclick = () => { codes.splice(+b.dataset.i, 1); renderBinds(); save(); });
+    row.querySelector(".add-key").onclick = () => { listening = listening === act ? null : act; listeningSc = null; renderBinds(); renderShortcuts(); };
+    box.appendChild(row);
+  }
+}
+// captura da próxima tecla: para uma ação (listening) ou para um atalho (listeningSc)
+let listeningSc = null;
+addEventListener("keydown", e => {
+  if (!listening && listeningSc === null) return;
+  e.preventDefault(); e.stopPropagation();
+  const cancel = e.code === "Escape" && listening !== "pause";
+  if (!cancel) {
+    // cada tecla faz uma coisa só: tira de qualquer outra ação ou atalho
+    for (const a of Object.keys(settings.binds)) settings.binds[a] = settings.binds[a].filter(c => c !== e.code);
+    settings.shortcuts.forEach((b, i) => { if (b.code === e.code && i !== listeningSc) b.code = ""; });
+    if (listening) settings.binds[listening].push(e.code);
+    else settings.shortcuts[listeningSc].code = e.code;
+  }
+  listening = null; listeningSc = null;
+  renderBinds(); renderShortcuts();
+  if (!cancel) save();
+}, true);
+
+// ---------- atalhos de teclado e regras de likes ----------
+// mesma escolha de regra do jogo (game.js → ruleFor), para mostrar o que um presente simulado vai fazer
+function ruleForPreview(gift, giftId, coins, count) {
+  const name = String(gift || "").trim().toLowerCase(), id = giftId ? String(giftId) : "";
+  const specific = r => !!(r.giftId || r.gift);
+  const matches = r => !specific(r) || (r.giftId ? String(r.giftId) === id : String(r.gift).trim().toLowerCase() === name);
+  const enough = r => specific(r) ? (count || 1) >= (Number(r.minCount) || 1) : coins >= (Number(r.minCoins) || 0);
+  const weight = r => specific(r) ? (Number(r.minCount) || 1) * (Number(r.giftCoins) || 1) : Number(r.minCoins) || 0;
+  return settings.donationRules.slice().sort((a, b) => (specific(b) - specific(a)) || weight(b) - weight(a)).find(r => matches(r) && enough(r));
+}
+const fmt = n => Number(n || 0).toLocaleString("pt-BR");
+const SC_KINDS = [["help", "😇 Avançar"], ["hurt", "😈 Voltar"], ["win", "🏆 Vitória"], ["gift", "🎁 Simular presente"], ["likes", "❤️ Simular likes"]];
+function scResult(b) {
+  if (b.kind === "likes") return ["", `Soma ${fmt(b.count || 1)} likes (passa pelas regras de likes)`];
+  if (b.kind === "win") return ["win", "Vitória instantânea"];
+  if (b.kind === "gift") {
+    const qty = Math.max(1, Number(b.qty) || 1), coins = Math.max(1, Number(b.coins) || 1) * qty, r = ruleForPreview(b.gift, b.giftId, coins, qty);
+    if (!r) return ["", "Nenhuma regra de presente combina"];
+    const m = Number(r.meters) || 0;
+    return r.effect === "win" ? ["win", "Vitória instantânea"] : m < 0 ? ["help", `Pela regra: avança ${fmt(-m)} m`] : ["hurt", `Pela regra: volta ${fmt(m)} m`];
+  }
+  return b.kind === "help" ? ["help", `Avança ${fmt(b.meters)} m`] : ["hurt", `Volta ${fmt(b.meters)} m`];
+}
+function refreshGiftBindResults() { // chamado pelo save(): regras mudaram → atualiza os textos
+  document.querySelectorAll("#shortcuts .sc").forEach((row, i) => {
+    const b = settings.shortcuts[i]; if (!b) return;
+    const [cls, txt] = scResult(b); row.className = "sc " + cls; row.querySelector(".sc-hint").textContent = "→ " + txt;
+  });
+}
+function soundPicker(obj) {
+  return `<div class="sound-row">
+    <select class="input" data-k="sound"${obj.soundData ? " disabled" : ""}>${Sound.LIBRARY.map(([id, label]) => `<option value="${id}" ${id === (obj.sound || "") ? "selected" : ""}>${label}</option>`).join("")}</select>
+    <button class="btn icon" type="button" data-a="hear" title="Ouvir" aria-label="Ouvir o som">${ICON.play}</button>
+    ${obj.soundData
+      ? `<span class="sound-file">🎵 ${esc((obj.soundName || "arquivo próprio").slice(0, 22))}</span><button class="btn ghost" type="button" data-a="unfile">Remover arquivo</button>`
+      : `<label class="btn ghost" title="MP3, WAV ou OGG de até 1 MB">Enviar arquivo<input type="file" accept="audio/*" data-a="file" hidden></label>`}
+  </div>`;
+}
+function wireSound(row, obj, rerender, fallback) {
+  const q = s => row.querySelector(s);
+  q("[data-k=sound]").addEventListener("input", () => { obj.sound = q("[data-k=sound]").value; save(); });
+  q("[data-a=hear]").onclick = () => obj.soundData ? Sound.playCustom(obj.soundData) : Sound.play(q("[data-k=sound]").value || fallback(), 2);
+  const file = q("[data-a=file]");
+  if (file) file.onchange = () => {
+    const f = file.files[0]; if (!f) return;
+    if (f.size > 1024 * 1024) return toast("Arquivo grande demais (máx. 1 MB)");
+    const rd = new FileReader();
+    rd.onload = () => { obj.soundData = rd.result; obj.soundName = f.name; rerender(); save(); Sound.playCustom(obj.soundData); };
+    rd.readAsDataURL(f);
+  };
+  const unfile = q("[data-a=unfile]");
+  if (unfile) unfile.onclick = () => { delete obj.soundData; delete obj.soundName; rerender(); save(); };
+}
+function renderShortcuts() {
+  const box = $("shortcuts"); box.innerHTML = "";
+  if (!settings.shortcuts.length) box.innerHTML = '<div class="empty">Nenhum atalho. Clique em “Novo atalho”: por exemplo, tecla 1 = avançar 50 m.</div>';
+  settings.shortcuts.forEach((b, i) => {
+    const row = document.createElement("div"); row.className = "sc";
+    const kindSel = `<select class="input" data-k="kind">${SC_KINDS.map(([k, l]) => `<option value="${k}" ${k === b.kind ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+    const keyHTML = listeningSc === i ? `<button class="add-key listening" data-a="key">Aperte a tecla…</button>`
+      : b.code ? `<button class="key" data-a="key" title="Clique para trocar a tecla">${esc(keyName(b.code))}</button>` : `<button class="add-key" data-a="key">Escolher tecla</button>`;
+    let detail = "", extra = "";
+    if (b.kind === "help" || b.kind === "hurt")
+      detail = `<label class="field"><span>Metros</span><div class="input-wrap"><input class="input" type="number" min="0" data-k="meters" value="${Math.abs(Number(b.meters) || 0)}"><span class="suffix">m</span></div></label>`,
+      extra = `<label class="field"><span>Efeito extra</span><select class="input" data-k="effect">${effectOptions(b.effect || "").replace(/<option value="win"[^>]*>[^<]*<\/option>/, "")}</select></label>`;
+    else if (b.kind === "gift")
+      detail = `<div class="field"><span>Presente</span><button class="gift-btn" type="button" data-a="gift">${giftButtonHTML(b)}</button></div>`,
+      extra = `<div class="grid-2"><label class="field"><span>Moedas</span><div class="input-wrap"><input class="input" type="number" min="1" data-k="coins" value="${b.coins || 1}"><span class="suffix">🪙</span></div></label><label class="field"><span>Quantidade</span><div class="input-wrap"><input class="input" type="number" min="1" data-k="qty" value="${b.qty || 1}"><span class="suffix">×</span></div></label></div>`;
+    else if (b.kind === "likes")
+      detail = `<label class="field"><span>Quantos likes</span><input class="input" type="number" min="1" data-k="count" value="${b.count || 100}"></label>`, extra = "<div></div>";
+    else detail = "<div></div>", extra = "<div></div>";
+    const hasSound = b.kind === "help" || b.kind === "hurt" || b.kind === "win";
+    row.innerHTML = `
+      <div class="field"><span>Tecla</span>${keyHTML}</div>
+      <label class="field"><span>Ação</span>${kindSel}</label>
+      ${detail}${extra}
+      <button class="btn icon ghost" data-a="del" title="Excluir atalho" aria-label="Excluir atalho">${ICON.trash}</button>
+      ${hasSound ? `<div class="field sc-sound"><span>Som</span>${soundPicker(b)}</div>` : ""}
+      <p class="sc-hint"></p>`;
+    const q = s => row.querySelector(s);
+    q("[data-a=key]").onclick = () => { listeningSc = listeningSc === i ? null : i; listening = null; renderBinds(); renderShortcuts(); };
+    q("[data-k=kind]").addEventListener("input", () => { b.kind = q("[data-k=kind]").value; if (b.kind === "likes" && !b.count) b.count = 100; renderShortcuts(); save(); });
+    const num = (k, min) => { const el = q(`[data-k=${k}]`); if (el) el.addEventListener("input", () => { b[k] = Math.max(min, Number(el.value) || 0); save(); }); };
+    num("meters", 0); num("coins", 1); num("qty", 1); num("count", 1);
+    const eff = q("[data-k=effect]"); if (eff) eff.addEventListener("input", () => { b.effect = eff.value; save(); });
+    const gb = q("[data-a=gift]"); if (gb) gb.onclick = () => pickGift(g => { Object.assign(b, giftFields(g)); if (g) b.coins = g.coins || 1; renderShortcuts(); save(); });
+    if (hasSound) wireSound(row, b, renderShortcuts, () => b.kind === "win" ? "fanfare" : b.kind === "help" ? "power" : "donate");
+    q("[data-a=del]").onclick = () => { settings.shortcuts.splice(i, 1); listeningSc = null; renderShortcuts(); save(); };
+    box.appendChild(row);
+  });
+  refreshGiftBindResults();
+}
+$("addShortcut").onclick = () => {
+  settings.shortcuts.push({ code: "", kind: "help", meters: 50 });
+  listeningSc = settings.shortcuts.length - 1; listening = null;
+  renderShortcuts(); save();
+};
+
+function renderLikeRules() {
+  const box = $("likeRules"); box.innerHTML = "";
+  if (!settings.likeRules.length) box.innerHTML = '<div class="empty">Likes não fazem nada. Crie uma regra: por exemplo, a cada 500 likes volta 10 m.</div>';
+  settings.likeRules.forEach((r, i) => {
+    const m = Number(r.meters) || 0, row = document.createElement("div");
+    row.className = "sc " + (r.effect === "win" ? "win" : m < 0 ? "help" : "hurt");
+    row.innerHTML = `
+      <label class="field"><span>A cada</span><div class="input-wrap"><input class="input" type="number" min="1" data-k="every" value="${r.every || 100}"><span class="suffix">❤️</span></div></label>
+      <div class="field"><span>Ação</span><div class="seg"><button type="button" data-v="hurt" aria-pressed="${m >= 0}">Atrapalhar</button><button type="button" data-v="help" aria-pressed="${m < 0}">Ajudar</button></div></div>
+      <label class="field"><span>${m < 0 ? "Avança" : "Volta"}</span><div class="input-wrap"><input class="input" type="number" min="0" data-k="abs" value="${Math.abs(m)}"><span class="suffix">m</span></div></label>
+      <label class="field"><span>Efeito extra</span><select class="input" data-k="effect">${effectOptions(r.effect || "")}</select></label>
+      <button class="btn icon ghost" data-a="del" title="Excluir regra" aria-label="Excluir regra">${ICON.trash}</button>
+      <div class="field sc-sound"><span>Som</span>${soundPicker(r)}</div>
+      <p class="sc-hint">→ a cada ${fmt(r.every)} likes: ${r.effect === "win" ? "vitória instantânea" : m < 0 ? `avança ${fmt(-m)} m` : `volta ${fmt(m)} m`}</p>`;
+    const q = s => row.querySelector(s);
+    const sync = () => {
+      const dir = q('.seg [aria-pressed="true"]').dataset.v, abs = Math.max(0, Number(q("[data-k=abs]").value) || 0);
+      r.every = Math.max(1, Number(q("[data-k=every]").value) || 1);
+      r.meters = dir === "help" ? -abs : abs; r.effect = q("[data-k=effect]").value;
+      save();
+    };
+    row.querySelectorAll(".seg button").forEach(btn => btn.onclick = () => {
+      row.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-pressed", x === btn)); sync(); renderLikeRules();
+    });
+    ["every", "abs", "effect"].forEach(k => q(`[data-k=${k}]`).addEventListener("input", sync));
+    q("[data-k=effect]").addEventListener("change", renderLikeRules);
+    wireSound(row, r, renderLikeRules, () => "like");
+    q("[data-a=del]").onclick = () => { settings.likeRules.splice(i, 1); renderLikeRules(); save(); };
+    box.appendChild(row);
+  });
+}
+$("addLikeRule").onclick = () => { settings.likeRules.push({ every: 500, meters: 10, effect: "" }); renderLikeRules(); save(); };
+
+// ---------- tela da live ----------
+const HUD_ITEMS = [
+  ["wins", "🏆 Vitórias da sessão"], ["coins", "🪙 Moedas coletadas"], ["likes", "❤️ Medidor de likes"],
+  ["teams", "😇 × 😈 Placar Ajuda × Atrapalha"], ["legend", "🎁 Faixa “o que cada presente faz”"],
+  ["feed", "📜 Últimas doações"], ["top", "🥇 Top da partida"], ["avatar", "🙂 Avatar com expressões"]
+];
+function renderHud() {
+  settings.hud = { ...CONFIG.hud, ...(settings.hud || {}) };
+  $("hudToggles").innerHTML = HUD_ITEMS.map(([k, l]) => `<div class="toggle-row"><div><b>${l}</b></div><button class="switch" role="switch" data-k="${k}" aria-checked="${settings.hud[k] !== false}" aria-label="${l}"></button></div>`).join("");
+  $("hudToggles").querySelectorAll(".switch").forEach(sw => sw.onclick = () => {
+    settings.hud[sw.dataset.k] = sw.getAttribute("aria-checked") !== "true"; sw.setAttribute("aria-checked", settings.hud[sw.dataset.k]); save();
+  });
+  settings.sound = { ...CONFIG.sound, ...(settings.sound || {}) };
+  for (const [id, k] of [["volMaster", "master"], ["volMusic", "music"], ["volSfx", "sfx"]]) {
+    $(id).value = Math.round(settings.sound[k] * 100); $(id + "Val").textContent = $(id).value + "%";
+    $(id).oninput = () => { settings.sound[k] = Number($(id).value) / 100; $(id + "Val").textContent = $(id).value + "%"; save(); };
+  }
+  $("hudTop").value = settings.hudTop ?? CONFIG.hudTop; $("hudTopVal").textContent = $("hudTop").value + " px";
+  $("hudTop").oninput = () => { settings.hudTop = Number($("hudTop").value); $("hudTopVal").textContent = settings.hudTop + " px"; save(); };
+}
+
+// ---------- vitórias da sessão (o número vive no jogo; o painel manda mudar) ----------
+const winsNow = () => (status && status.wins) || 0;
+$("winsPlus").onclick = () => send({ type: "wins", value: winsNow() + 1 });
+$("winsMinus").onclick = () => send({ type: "wins", value: Math.max(0, winsNow() - 1) });
+$("winsZero").onclick = () => { if (confirm("Zerar as vitórias da sessão?")) send({ type: "wins", value: 0 }); };
+
+// ---------- configurações gerais ----------
+function renderGeneral() {
+  for (const k of FIELDS) {
+    $(k).value = settings[k];
+    $(k).oninput = () => { settings[k] = Math.max(0, Number($(k).value) || 0); save(); };
+  }
+}
+
+// ---------- ações ----------
+$("add").onclick = () => addRule({ gift: "", minCoins: 1, meters: 50, effect: "" });
+$("addHelp").onclick = () => pickGift(g => { addRule({ ...giftFields(g), minCoins: 1, meters: -1000, effect: "" }); toast(g ? `${g.name} agora avança 1000 m` : "Regra de ajuda criada"); }, false);
+$("pause").onclick = () => send({ type: "pause" });
+$("openMenu").onclick = () => { send({ type: "menu" }); toast("Menu aberto no jogo"); };
+$("bot").onclick = () => { send({ type: "bot" }); $("bot").setAttribute("aria-checked", $("bot").getAttribute("aria-checked") !== "true"); };
+$("restart").onclick = () => { if (confirm("Reiniciar a partida do zero?")) send({ type: "restart" }); };
+document.querySelectorAll("[data-coins]").forEach(b => b.onclick = () => { send({ type: "gift", sim: true, gift: "", coins: Number(b.dataset.coins) }); toast("Teste enviado"); });
+$("tHelp").onclick = () => { send({ type: "gift", sim: true, gift: "", coins: 1, rule: { meters: -1000, effect: "" } }); toast("Teste enviado"); };
+$("tLikes").onclick = () => { send({ type: "like", count: Number((settings.likeRules[0] || {}).every) || 100 }); toast("Likes enviados"); };
+$("tSend").onclick = () => { const f = giftFields(testGift); send({ type: "gift", sim: true, gift: f.gift || "", giftId: f.giftId, img: f.giftImg || "", coins: f.giftCoins || 1 }); toast("Teste enviado"); };
+$("reset").onclick = () => { if (confirm("Restaurar regras, meta e país para o padrão?")) { settings = defaults(); renderAll(); save(); } };
+
+// presentes que chegam pela live (só com o Iniciar.bat / server.js)
+const seen = new Map();
+function onGift(d) {
+  if (d.sim || !d.gift) return;
+  const g = catalog.find(x => x.id === String(d.giftId)) || { id: String(d.giftId || ""), name: d.gift, img: d.img || "", coins: d.coins };
+  seen.set(g.id || g.name, g);
+  $("recent").innerHTML = "";
+  for (const gift of seen.values()) {
+    const c = document.createElement("button"); c.className = "chip";
+    c.innerHTML = `${gift.img ? `<img src="${esc(gift.img)}" alt="" width="18" height="18" referrerpolicy="no-referrer">` : "🎁"} ${esc(gift.name)} <em>${gift.coins} 🪙</em>`;
+    c.onclick = () => { addRule({ ...giftFields(gift), minCoins: 1, meters: 50, effect: "" }); toast(`Regra criada para ${gift.name}`); };
+    $("recent").appendChild(c);
+  }
+}
+if (http) (function listen() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = m => {
+    let d; try { d = JSON.parse(m.data); } catch { return; }
+    if (d.type === "status") onStatus(d);
+    if (d.type === "gift") onGift(d);
+    if (d.type === "live") onLive(d);
+    if (d.type === "gifts") loadCatalog();
+    if (d.type === "gamePatch" && d.patch) { Object.assign(settings, d.patch); renderThemes(); renderSkins(); renderHud(); }
+  };
+  ws.onclose = () => setTimeout(listen, 3000);
+})();
+
+function renderAll() {
+  renderThemes(); renderSkins(); renderRules(); renderGeneral(); renderBinds(); renderShortcuts(); renderLikeRules(); renderHud(); renderTestGift();
+}
+renderAll();
+loadCatalog();
+if (http) fetch("/api/settings").then(r => r.ok ? r.json() : null).then(s => {
+  if (s && s.donationRules) { settings = migrate({ ...settings, ...s }); renderAll(); }
+}).catch(() => {});
+</script>
+</body>
+</html>

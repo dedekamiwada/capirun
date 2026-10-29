@@ -1,0 +1,49 @@
+{
+  "name": "capivara-runner",
+  "productName": "Capivara Runner",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Endless runner interativo para TikTok LIVE",
+  "main": "main.js",
+  "scripts": {
+    "start": "node server.js",
+    "app": "electron .",
+    "build:exe": "electron-builder --win portable"
+  },
+  "dependencies": {
+    "tiktok-live-connector": "2.5.0",
+    "ws": "8.18.0"
+  },
+  "build": {
+    "appId": "local.capivara.runner",
+    "productName": "Capivara Runner",
+    "asar": false,
+    "files": [
+      "main.js",
+      "app-server.js",
+      "index.html",
+      "admin.html",
+      "config.js",
+      "themes.js",
+      "scenery.js",
+      "characters.js",
+      "sound.js",
+      "game.js",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "portable",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "CapivaraRunner.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "38.2.2",
+    "electron-builder": "26.0.12"
+  }
+}
