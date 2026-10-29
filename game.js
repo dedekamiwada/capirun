@@ -188,7 +188,10 @@ function releaseQueue(dz) {
 // altura do chão numa pista, na posição do jogador: trilho, rampa ou teto de trem
 // reach: só conta superfícies até essa altura (o que dá para pisar); trens já atravessados não contam
 // bars: inclui o topo das barreiras (dá para pisar em cima delas); a câmera ignora esses degraus
-function floorAt(lane, reach = Infinity, bars = true) {
+// climb: vindo de frente (sem estar trocando de pista), a rampa e o trem logo depois dela sempre se sobem,
+// mesmo que a altura mude mais que "reach" num quadro só (quadro lento ou velocidade alta). Sem isso a rampa
+// virava parede, o jogo contava uma batida e o personagem atravessava o trem por dentro, com a câmera embaixo
+function floorAt(lane, reach = Infinity, bars = true, climb = false) {
   let f = 0;
   for (const o of S.objs) {
     if (o.lane !== lane || o.passed) continue;
@@ -198,14 +201,18 @@ function floorAt(lane, reach = Infinity, bars = true) {
     }
     if (!o.d || PZ < o.z || PZ > o.z + o.d) continue;
     const h = o.t === "train" ? TRAIN_H : o.t === "ramp" ? TRAIN_H * (PZ - o.z) / o.d : 0;
-    if (h <= reach) f = Math.max(f, h);
+    if (h <= reach || (climb && climbable(o))) f = Math.max(f, h);
   }
   return f;
 }
+// rampa, ou trem que começa onde termina uma rampa da mesma pista
+function climbable(o) {
+  return o.t === "ramp" || (o.t === "train" && S.objs.some(r => r.t === "ramp" && r.lane === o.lane && !r.passed && Math.abs(r.z + r.d - o.z) < 0.6));
+}
 // trem (ou trecho alto de rampa) na posição do jogador que é alto demais para subir: é uma parede
-function wallAt(lane) {
+function wallAt(lane, climb = false) {
   return S.objs.find(o => o.lane === lane && !o.passed && (o.t === "train" || o.t === "ramp") && PZ >= o.z && PZ <= o.z + o.d &&
-    (o.t === "train" ? TRAIN_H : TRAIN_H * (PZ - o.z) / o.d) - S.y > 0.7);
+    !(climb && climbable(o)) && (o.t === "train" ? TRAIN_H : TRAIN_H * (PZ - o.z) / o.d) - S.y > 0.7);
 }
 
 // ---------- doações ----------
@@ -577,7 +584,7 @@ function update(dt) {
   // acima dela. Pisar no topo de uma barreira não mexe a câmera (seria um tranco a cada barreira)
   S.camX += (S.x - S.camX) * Math.min(1, dt * 8);
   if (S.state === "run") {
-    if (S.grounded) S.camBase = floorAt(Math.round(S.x / LANE), S.y + STEP, false);
+    if (S.grounded) S.camBase = floorAt(Math.round(S.x / LANE), S.y + STEP, false, true);
     else S.camBase = Math.max(S.y - 2.4, Math.min(S.camBase, S.y));
   }
   const camTarget = S.camBase + CAM_H;
@@ -620,16 +627,16 @@ function update(dt) {
   S.x += (S.lane * LANE - S.x) * Math.min(1, dt * 14);
   const pl = Math.round(S.x / LANE);
   // trem alto demais na frente/lado: nunca teletransporta para o teto (só se sobe pela rampa ou caindo de cima)
-  const wall = wallAt(pl);
+  const changing = S.prevLane !== undefined && S.prevLane !== pl && Math.abs(S.x - pl * LANE) > 0.25;
+  const wall = wallAt(pl, !changing);
   if (wall) {
-    const changing = S.prevLane !== undefined && S.prevLane !== pl && Math.abs(S.x - pl * LANE) > 0.25;
     if (BOT.on) wall.passed = true;                       // bot atravessa sem penalidade
     else if (changing && !wallAt(S.prevLane)) {           // bateu de lado trocando de pista: quica de volta
       S.lane = S.prevLane; S.stumble = Math.max(S.stumble, 0.3);
       Sound.play("lane"); react("shock", 0.8);
     } else { crash(); wall.passed = true; }               // de frente: perde metros e atravessa piscando
   }
-  S.floor = floorAt(Math.round(S.x / LANE), S.y + STEP);
+  S.floor = floorAt(Math.round(S.x / LANE), S.y + STEP, true, !changing);
   const wasGrounded = S.grounded;
   S.vy -= 38 * dt; S.y += S.vy * dt;
   // subindo no pulo e passando pelo topo de uma barreira: só "sobe o degrau", sem cortar o pulo
