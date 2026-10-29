@@ -19,10 +19,12 @@ function startServer({ port = 8080, dataDir = __dirname, log = console.log } = {
 
   // ---------- TikTok LIVE ----------
   const live = { state: "idle", username: readJson("live.json", {}).username || "", roomId: "", error: "", conn: null, manual: false };
-  const liveStatus = () => ({ type: "live", state: live.state, username: live.username, roomId: live.roomId, error: live.error });
+  const liveStatus = () => ({ type: "live", state: live.state, username: live.username, roomId: live.roomId, error: live.error, catalog: live.catalog || "" });
   const setLive = patch => { Object.assign(live, patch); send(liveStatus()); };
 
-  // catálogo oficial de presentes (vem da própria TikTok ao conectar; fica salvo para usar offline)
+  // catálogo de presentes com os dados oficiais da TikTok (ID, nome, valor e imagem), salvo para usar offline.
+  // A lista completa da sala exige o plano pago do serviço de assinatura (Euler Stream); sem ele, o catálogo
+  // é montado com os presentes que chegam na live, cada um com os dados oficiais que vêm no próprio evento.
   function normalizeGift(x) {
     const img = x.image || x.icon || {};
     return {
@@ -30,13 +32,19 @@ function startServer({ port = 8080, dataDir = __dirname, log = console.log } = {
       img: (img.url_list || img.urlList || [])[0] || "", combo: !!x.combo || x.type === 1
     };
   }
-  function saveCatalog(list) {
-    const gifts = list.map(normalizeGift).filter(g => g.id && g.name)
-      .filter((g, i, a) => a.findIndex(o => o.id === g.id) === i).sort((a, b) => a.coins - b.coins || a.name.localeCompare(b.name));
-    if (!gifts.length) return;
+  function mergeCatalog(list) {
+    const known = readJson("gifts.json", { gifts: [] }).gifts || [], byId = new Map(known.map(g => [g.id, g]));
+    let added = 0;
+    for (const g of list.map(normalizeGift)) {
+      if (!g.id || !g.name) continue;
+      if (!byId.has(g.id)) added++;
+      byId.set(g.id, { ...byId.get(g.id), ...g, img: g.img || (byId.get(g.id) || {}).img || "" });
+    }
+    if (!added && known.length) return 0;
+    const gifts = [...byId.values()].sort((a, b) => a.coins - b.coins || a.name.localeCompare(b.name));
     writeJson("gifts.json", { updated: new Date().toISOString(), from: live.username, gifts });
     send({ type: "gifts", updated: Date.now(), count: gifts.length });
-    log(`Catálogo de presentes atualizado: ${gifts.length} presentes`);
+    return added;
   }
   function friendlyError(e) {
     const n = e && (e.constructor && e.constructor.name || e.name) || "";
@@ -59,7 +67,9 @@ function startServer({ port = 8080, dataDir = __dirname, log = console.log } = {
     setLive({ state: "connecting", username, error: "" });
     live.manual = false;
     const { TikTokLiveConnection, WebcastEvent, ControlEvent } = await import("tiktok-live-connector");
-    const conn = new TikTokLiveConnection(username, { enableExtendedGiftInfo: true });
+    // sem enableExtendedGiftInfo: pedir a lista de presentes durante a conexão exige o plano pago do Euler Stream
+    // e, se falhar, derruba a conexão inteira; a lista é tentada depois, sem bloquear
+    const conn = new TikTokLiveConnection(username, { enableExtendedGiftInfo: false });
     live.conn = conn;
 
     conn.on(WebcastEvent.GIFT, d => {
@@ -72,6 +82,7 @@ function startServer({ port = 8080, dataDir = __dirname, log = console.log } = {
       const user = (d.user && (d.user.nickname || d.user.displayId)) || "alguém";
       log(`🎁 ${user}: ${name} x${count} (${per * count} moedas) [id ${id}]`);
       send({ type: "gift", user, gift: name, giftId: id, coins: per * count, count, img });
+      if (g.id || ext.id) { const n = mergeCatalog([{ ...ext, ...g, id: id || g.id || ext.id }]); if (n) log(`Catálogo: +${n} presente (${name})`); }
     });
     conn.on(WebcastEvent.LIKE, d => send({ type: "like", user: d.user && d.user.nickname, count: Number(d.count) || 1 }));
     conn.on(WebcastEvent.FOLLOW, d => send({ type: "follow", user: d.user && d.user.nickname }));
@@ -88,9 +99,10 @@ function startServer({ port = 8080, dataDir = __dirname, log = console.log } = {
       if (live.conn !== conn) return;
       setLive({ state: "connected", roomId: conn.roomId, error: "" });
       log(`Conectado à live de @${username} (sala ${conn.roomId})`);
-      const gifts = conn.availableGifts;
-      if (Array.isArray(gifts) && gifts.length) saveCatalog(gifts);
-      else conn.fetchAvailableGifts().then(l => Array.isArray(l) && saveCatalog(l)).catch(e => log("Não consegui baixar o catálogo de presentes:", e.message));
+      // lista completa da sala: só funciona com o plano pago do serviço de assinatura; se falhar, segue normal
+      conn.fetchAvailableGifts()
+        .then(l => { if (Array.isArray(l) && l.length) { mergeCatalog(l); setLive({ catalog: "full" }); } })
+        .catch(e => { log("Lista completa de presentes indisponível:", e.message); setLive({ catalog: "growing" }); });
     } catch (e) {
       if (live.conn === conn) { live.conn = null; setLive({ state: "error", error: friendlyError(e) }); }
       log("Falha ao conectar na TikTok:", friendlyError(e));

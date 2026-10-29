@@ -649,8 +649,8 @@ function loadCatalog() {
   fetch("/api/gifts").then(r => r.json()).then(d => {
     catalog = d.gifts || [];
     $("catalogInfo").textContent = catalog.length
-      ? `Catálogo oficial: ${catalog.length} presentes (atualizado ${new Date(d.updated).toLocaleString("pt-BR")}).`
-      : "Catálogo de presentes: conecte na sua live uma vez para carregar.";
+      ? `Catálogo: ${catalog.length} presentes com dados oficiais da TikTok (atualizado ${new Date(d.updated).toLocaleString("pt-BR")}).`
+      : "Catálogo vazio: os presentes entram aqui, com nome, valor e imagem oficiais, conforme chegam na sua live.";
   }).catch(() => {});
 }
 let pickCb = null;
@@ -661,7 +661,7 @@ function pickGift(cb, allowAny = true) {
 function renderGiftGrid() {
   const q = $("giftSearch").value.trim().toLowerCase(), grid = $("giftGrid");
   if (!catalog.length) {
-    grid.innerHTML = `<div class="modal-empty" style="grid-column:1/-1">O catálogo ainda não foi carregado.<br>Inicie sua live, conecte no cartão <b>TikTok LIVE</b> e os presentes oficiais aparecem aqui com imagem e valor.</div>`;
+    grid.innerHTML = `<div class="modal-empty" style="grid-column:1/-1">O catálogo ainda está vazio.<br>Conecte na sua live: cada presente que alguém mandar entra aqui com nome, valor e imagem oficiais.<br>Dica: mande um presente barato (ex.: uma rosa) de outra conta para já ter o primeiro.</div>`;
     if (pickGift.allowAny) grid.insertAdjacentHTML("afterbegin", `<button class="gift" data-any><span class="any">🎁</span><b>Qualquer presente</b><em>—</em></button>`);
   } else {
     const list = catalog.filter(g => !q || g.name.toLowerCase().includes(q));
@@ -700,6 +700,7 @@ function onLive(s) {
   $("liveTitle").textContent = s.state === "connected" ? `Conectado à live de @${s.username}` : title;
   $("liveSub").textContent = s.error || (s.state === "connected" ? "Presentes, likes e follows já mexem no jogo." : sub);
   if (s.username && !$("liveUser").value) $("liveUser").value = s.username;
+  if (s.catalog === "growing") $("catalogInfo").textContent = `${catalog.length ? catalog.length + " presentes no catálogo. " : ""}A lista completa de presentes da TikTok exige um plano pago do serviço de conexão; por isso o catálogo vai crescendo com os presentes que chegam na live.`;
   const on = ["connected", "connecting", "reconnecting"].includes(s.state);
   $("liveBtn").textContent = on ? "Desconectar" : "Conectar";
   $("liveBtn").className = "btn " + (on ? "" : "primary");
