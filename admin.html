@@ -368,8 +368,12 @@
           <span id="pauseText">Pausar jogo</span>
         </button>
         <div class="toggle-row">
-          <div><b>Bot automático</b><small>Joga sozinho e nunca bate.</small></div>
+          <div><b>Bot automático</b><small>Joga sozinho, só com movimentos que uma pessoa faria, e não perde metros.</small></div>
           <button class="switch" id="bot" role="switch" aria-checked="false" aria-label="Bot automático"></button>
+        </div>
+        <div class="toggle-row">
+          <div><b>🪙 Bot desvia das moedas</b><small>O bot foge das moedas o máximo possível (trocando de pista e pulando por cima). Algumas ficam no único caminho e ele pega.</small></div>
+          <button class="switch" id="botNoCoins" role="switch" aria-checked="false" aria-label="Bot desvia das moedas"></button>
         </div>
         <div class="toggle-row">
           <div><b>🏆 Vitórias da sessão</b><small>Aparece na tela do jogo.</small></div>
@@ -412,11 +416,16 @@
     </section>
 
     <section class="card">
-      <div class="card-head"><div><h2>Configurações</h2><p>Meta e penalidades.</p></div></div>
+      <div class="card-head"><div><h2>Configurações</h2><p>Modo de jogo, meta e penalidades.</p></div></div>
       <div class="card-body grid-2">
+        <div class="toggle-row" style="grid-column:1/-1"><div><b>Presente fora da lista ajuda</b><br><span class="muted">Usa a regra do presente de valor mais próximo, sempre avançando (o "zera" fica de fora)</span></div><button class="switch" role="switch" id="giftFallback" aria-label="Presente fora da lista ajuda"></button></div>
+        <label class="field" style="grid-column:1/-1"><span>Modo de jogo</span><select class="input" id="mode">
+          <option value="meta">🏁 Meta: chegar na meta (bater tira metros)</option>
+          <option value="infinito">♾️ Infinito: sem meta e sem presentes, bater acaba a run</option>
+        </select></label>
         <label class="field"><span>Meta</span><div class="input-wrap"><input class="input" type="number" id="goalMeters" min="100" step="100"><span class="suffix">m</span></div></label>
         <label class="field"><span>Volta ao bater</span><div class="input-wrap"><input class="input" type="number" id="crashPenaltyMeters" min="0"><span class="suffix">m</span></div></label>
-        <label class="field" style="grid-column:1/-1"><span>Nova partida após a vitória (0 = não reinicia)</span><div class="input-wrap"><input class="input" type="number" id="autoRestartSec" min="0"><span class="suffix">s</span></div></label>
+        <label class="field" style="grid-column:1/-1"><span>Nova partida após a vitória ou o fim da run (0 = não reinicia)</span><div class="input-wrap"><input class="input" type="number" id="autoRestartSec" min="0"><span class="suffix">s</span></div></label>
       </div>
     </section>
 
@@ -438,6 +447,7 @@
 </div>
 
 <script src="config.js"></script>
+<script src="rules.js"></script>
 <script src="themes.js"></script>
 <script src="scenery.js"></script>
 <script src="characters.js"></script>
@@ -455,7 +465,7 @@ const ICON = {
 };
 
 const defaults = () => ({
-  ...Object.fromEntries(FIELDS.map(k => [k, CONFIG[k]])), donationRules: CONFIG.donationRules.map(r => ({ ...r })), theme: "",
+  ...Object.fromEntries(FIELDS.map(k => [k, CONFIG[k]])), mode: CONFIG.mode || "meta", botCoins: CONFIG.botCoins !== false, giftFallback: CONFIG.giftFallback !== false, donationRules: CONFIG.donationRules.map(r => ({ ...r })), theme: "",
   skin: CONFIG.skin, binds: JSON.parse(JSON.stringify(CONFIG.binds)), shortcuts: JSON.parse(JSON.stringify(CONFIG.shortcuts)), likeRules: JSON.parse(JSON.stringify(CONFIG.likeRules)),
   hud: { ...CONFIG.hud }, hudTop: CONFIG.hudTop
 });
@@ -498,9 +508,10 @@ function save() {
 let lastStatus = 0;
 function onStatus(s) {
   status = s; lastStatus = Date.now();
-  const pct = s.goal ? Math.min(100, s.dist / s.goal * 100) : 0;
-  $("mDist").innerHTML = `<b>${s.dist.toLocaleString("pt-BR")} m</b> de ${s.goal.toLocaleString("pt-BR")}`;
-  $("mPct").textContent = pct.toFixed(1) + "%";
+  const inf = s.mode === "infinito", pct = inf ? (s.best ? Math.min(100, s.dist / s.best * 100) : 0) : s.goal ? Math.min(100, s.dist / s.goal * 100) : 0;
+  $("mDist").innerHTML = inf ? `<b>${s.dist.toLocaleString("pt-BR")} m</b> · recorde ${(s.best || 0).toLocaleString("pt-BR")} · 🦫 ${s.keys || 0} ${(s.keys || 0) === 1 ? "cabeça" : "cabeças"}${s.state === "over" ? " · <b>fim da run</b>" : ""}`
+    : `<b>${s.dist.toLocaleString("pt-BR")} m</b> de ${s.goal.toLocaleString("pt-BR")}`;
+  $("mPct").textContent = inf ? "♾️" : pct.toFixed(1) + "%";
   $("mBar").style.width = pct + "%";
   $("pPaused").hidden = !s.paused;
   $("pBot").hidden = !s.bot;
@@ -562,12 +573,13 @@ function renderRules() {
   settings.donationRules.forEach((r, i) => {
     const m = Number(r.meters) || 0, specific = !!(r.giftId || r.gift);
     const el = document.createElement("div");
-    el.className = "rule" + (m < 0 ? " help" : "");
+    const helps = m < 0 || r.effect === "win"; // vitória é ajuda mesmo com 0 m
+    el.className = "rule" + (helps ? " help" : "");
     el.innerHTML = `
       <div class="field f-gift"><span>Presente</span><button class="gift-btn" type="button" data-a="gift">${giftButtonHTML(r)}</button></div>
       <label class="field f-coins"><span>${specific ? "Quantidade mínima" : "A partir de"}</span><div class="input-wrap"><input class="input" type="number" min="${specific ? 1 : 0}" data-k="amount"><span class="suffix">${specific ? "×" : "🪙"}</span></div><small class="amount-hint"></small></label>
       <div class="field f-seg"><span>Ação</span><div class="seg"><button type="button" data-v="hurt">Atrapalhar</button><button type="button" data-v="help">Ajudar</button></div></div>
-      <label class="field f-meters"><span data-l="m">${m < 0 ? "Avança" : "Volta"}</span><div class="input-wrap"><input class="input" type="number" min="0" data-k="abs"><span class="suffix">m</span></div></label>
+      <label class="field f-meters"><span data-l="m">${m < 0 ? "Avança" : "Volta"}${r.perGift ? " (cada)" : ""}</span><div class="input-wrap"><input class="input" type="number" min="0" data-k="abs"><span class="suffix">m</span></div></label>
       <label class="field f-effect"><span>Efeito</span><select class="input" data-k="effect">${effectOptions(r.effect || "")}</select></label>
       <div class="field f-sound"><span>Som na live</span>
         <div class="sound-row">
@@ -596,9 +608,9 @@ function renderRules() {
     const setDir = dir => {
       el.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v === dir));
       el.classList.toggle("help", dir === "help");
-      q('[data-l=m]').textContent = dir === "help" ? "Avança" : "Volta";
+      q('[data-l=m]').textContent = (dir === "help" ? "Avança" : "Volta") + (r.perGift ? " (cada)" : "");
     };
-    setDir(m < 0 ? "help" : "hurt");
+    setDir(helps ? "help" : "hurt");
     const sync = () => {
       const dir = q('.seg [aria-pressed="true"]').dataset.v, abs = Math.max(0, Number(q('[data-k=abs]').value) || 0);
       const amount = Number(q("[data-k=amount]").value) || 0;
@@ -648,6 +660,8 @@ function loadCatalog() {
   if (!http) { $("catalogInfo").textContent = "Abra pelo app (CapivaraRunner.exe) para conectar e carregar o catálogo."; return; }
   fetch("/api/gifts").then(r => r.json()).then(d => {
     catalog = d.gifts || [];
+    // regras feitas pelo nome (ex.: "Rosa"/"Rose"): pega imagem, ID e valor oficiais do catálogo
+    if (GiftRules.resolve(settings.donationRules, catalog)) { renderRules(); save(); }
     $("catalogInfo").textContent = catalog.length
       ? `Catálogo: ${catalog.length} presentes com dados oficiais da TikTok (atualizado ${new Date(d.updated).toLocaleString("pt-BR")}).`
       : "Catálogo vazio: os presentes entram aqui, com nome, valor e imagem oficiais, conforme chegam na sua live.";
@@ -770,12 +784,7 @@ addEventListener("keydown", e => {
 // ---------- atalhos de teclado e regras de likes ----------
 // mesma escolha de regra do jogo (game.js → ruleFor), para mostrar o que um presente simulado vai fazer
 function ruleForPreview(gift, giftId, coins, count) {
-  const name = String(gift || "").trim().toLowerCase(), id = giftId ? String(giftId) : "";
-  const specific = r => !!(r.giftId || r.gift);
-  const matches = r => !specific(r) || (r.giftId ? String(r.giftId) === id : String(r.gift).trim().toLowerCase() === name);
-  const enough = r => specific(r) ? (count || 1) >= (Number(r.minCount) || 1) : coins >= (Number(r.minCoins) || 0);
-  const weight = r => specific(r) ? (Number(r.minCount) || 1) * (Number(r.giftCoins) || 1) : Number(r.minCoins) || 0;
-  return settings.donationRules.slice().sort((a, b) => (specific(b) - specific(a)) || weight(b) - weight(a)).find(r => matches(r) && enough(r));
+  return GiftRules.pick(settings.donationRules, { gift, giftId, count }, coins, settings.giftFallback !== false);
 }
 const fmt = n => Number(n || 0).toLocaleString("pt-BR");
 const SC_KINDS = [["help", "😇 Avançar"], ["hurt", "😈 Voltar"], ["win", "🏆 Vitória"], ["gift", "🎁 Simular presente"], ["likes", "❤️ Simular likes"]];
@@ -927,6 +936,12 @@ $("winsZero").onclick = () => { if (confirm("Zerar as vitórias da sessão?")) s
 
 // ---------- configurações gerais ----------
 function renderGeneral() {
+  $("botNoCoins").setAttribute("aria-checked", settings.botCoins === false);
+  $("botNoCoins").onclick = () => { settings.botCoins = settings.botCoins === false; $("botNoCoins").setAttribute("aria-checked", settings.botCoins === false); save(); toast(settings.botCoins === false ? "Bot desviando das moedas" : "Bot pegando moedas"); };
+  $("giftFallback").setAttribute("aria-checked", settings.giftFallback !== false);
+  $("giftFallback").onclick = () => { settings.giftFallback = settings.giftFallback === false; $("giftFallback").setAttribute("aria-checked", settings.giftFallback); save(); };
+  $("mode").value = settings.mode === "infinito" ? "infinito" : "meta";
+  $("mode").onchange = () => { settings.mode = $("mode").value; save(); toast(settings.mode === "infinito" ? "Modo infinito" : "Modo meta"); };
   for (const k of FIELDS) {
     $(k).value = settings[k];
     $(k).oninput = () => { settings[k] = Math.max(0, Number($(k).value) || 0); save(); };
@@ -968,7 +983,7 @@ if (http) (function listen() {
     if (d.type === "gift") onGift(d);
     if (d.type === "live") onLive(d);
     if (d.type === "gifts") loadCatalog();
-    if (d.type === "gamePatch" && d.patch) { Object.assign(settings, d.patch); renderThemes(); renderSkins(); renderHud(); }
+    if (d.type === "gamePatch" && d.patch) { Object.assign(settings, d.patch); renderThemes(); renderSkins(); renderHud(); renderGeneral(); }
   };
   ws.onclose = () => setTimeout(listen, 3000);
 })();

@@ -1,6 +1,8 @@
 // Configuração padrão do jogo — edite à vontade (é um arquivo "modável").
 // As regras de presentes também podem ser editadas pelo painel admin.html (fica salvo e sobrepõe estes valores).
 window.CONFIG = {
+  botCoins: true,              // false = o bot automático desvia das moedas o máximo possível
+  mode: "meta",                // "meta": chegar na meta (bater tira metros) · "infinito": sem meta, bater acaba a run
   goalMeters: 100000,          // meta da live
   startSpeed: 22,              // metros por segundo
   maxSpeed: 45,
@@ -37,12 +39,21 @@ window.CONFIG = {
   //   giftId / gift: presente escolhido (vazio = qualquer presente)
   //   meters: positivo = ATRAPALHA (volta), negativo = AJUDA (avança)
   //   effect: um dos efeitos de EFFECTS abaixo (ou "" para nenhum)
+  // Presentes da live (a imagem dos presentes): meters positivo = volta (atrapalha), negativo = avança (ajuda).
+  // perGift: vale para cada unidade (5 Rosas num combo = 5 × 50 m). aliases: o nome em outras línguas.
+  // giftCoins: valor de 1 unidade em moedas (o catálogo oficial da TikTok atualiza sozinho quando a live conecta)
   donationRules: [
-    { gift: "", minCoins: 1000, meters: 5000, effect: "reverse", meme: "É O FIM DA LINHA 💀" },
-    { gift: "", minCoins: 100,  meters: 1000, effect: "speed",   meme: "ACELERA, CAPIVARA 🏎️" },
-    { gift: "", minCoins: 10,   meters: 200,  effect: "train",   meme: "TREM SURPRESA 🚂" },
-    { gift: "", minCoins: 1,    meters: 50,   effect: "",        meme: "voltou 50m kkkk" }
+    { gift: "Rosa",            aliases: ["Rose"],                                  giftCoins: 1,   minCount: 1, perGift: true, meters: 50,    effect: "" },
+    { gift: "TikTok",          aliases: [],                                        giftCoins: 1,   minCount: 1, perGift: true, meters: -50,   effect: "" },
+    { gift: "Mini Dino",       aliases: ["Mini Dinosaur", "Tiny Dino"],            giftCoins: 10,  minCount: 1, perGift: true, meters: -500,  effect: "" },
+    { gift: "Perfume",         aliases: [],                                        giftCoins: 20,  minCount: 1, perGift: true, meters: 500,   effect: "" },
+    { gift: "Confete",         aliases: ["Confetti"],                              giftCoins: 100, minCount: 1, perGift: true, meters: -2500, effect: "" },
+    { gift: "Mãos em coração", aliases: ["Hand Hearts", "Hand Heart"],             giftCoins: 100, minCount: 1, perGift: true, meters: 2500,  effect: "" },
+    { gift: "Você é demais",   aliases: ["You're awesome", "You are awesome"],     giftCoins: 0,   minCount: 1, meters: 0, effect: "zera" },
+    { gift: "Money Gun",       aliases: ["Arma de dinheiro"],                      giftCoins: 500, minCount: 1, meters: 0, effect: "win" }
   ],
+  // presente que não está na lista acima: ajuda como o presente da lista de valor mais próximo (o "−" vira "+")
+  giftFallback: true,
 
   memes: ["sigma grindset", "aura +1000", "skibidi trem", "é o bonde", "foco no shape", "não tankei", "brainrot speedrun"],
 
@@ -65,5 +76,6 @@ window.EFFECTS = {
   magnet:  { label: "🧲 Ímã 12s",                    kind: "help" },
   double:  { label: "2️⃣ Moedas em dobro 12s",       kind: "help" },
   slow:    { label: "🐢 Desacelerar 10s",            kind: "help" },
+  zera:    { label: "0️⃣ Zerar a distância",          kind: "hurt" },
   win:     { label: "🏆 VITÓRIA INSTANTÂNEA",        kind: "help" }
 };

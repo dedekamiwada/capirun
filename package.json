@@ -24,6 +24,7 @@
       "index.html",
       "admin.html",
       "config.js",
+      "rules.js",
       "themes.js",
       "scenery.js",
       "characters.js",

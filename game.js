@@ -20,9 +20,10 @@ const inBarZ = o => o.z <= PZ + 0.5 && o.z >= PZ - 0.8;
 // ---------- estado ----------
 let S;
 function reset() {
+  if (S) saveBest(); // reiniciou no meio de uma run do modo infinito: o recorde não se perde
   S = {
     state: "menu", dist: 0, speed: C.startSpeed, coins: 0, t: 0,
-    lane: 0, x: 0, y: 0, vy: 0, floor: 0, grounded: true, jumps: 1, roll: 0, invuln: 0, stumble: 0,
+    lane: 0, x: 0, y: 0, vy: 0, floor: 0, grounded: true, jumps: 1, roll: 0, invuln: 0, stumble: 0, dizzy: 0,
     camX: 0, camY: CAM_H, camBase: 0,
     boardTime: 0, magnet: 0, double: 0, shield: 0,
     speedFx: 0, slowFx: 0, reverseFx: 0, darkFx: 0, likes: 0,
@@ -31,7 +32,8 @@ function reset() {
     paused: false, themeOrder: THEME_ORDER,
     look: 0, lookDir: 1, lookT: 0, nextLook: 4, mood: "", moodT: 0, alerts: [],
     team: { help: 0, hurt: 0 }, donors: {}, combo: 0, comboT: 0, flash: 0, flashCol: "#fff", shakeT: 0, shakeA: 0,
-    confetti: [], milestone: 0, winner: "", winT: 0, legendX: 0, likeCounts: {}, landT: 0
+    confetti: [], milestone: 0, winner: "", winT: 0, legendX: 0, likeCounts: {}, landT: 0,
+    notes: [], overT: 0, continues: 0, newBest: false, letterCD: 250 + Math.random() * 200, letterOut: false
   };
 }
 // vitórias da sessão (sobrevivem ao reinício da partida; editáveis/zeráveis pelo painel)
@@ -41,22 +43,65 @@ function setWins(n) {
   SESSION.wins = Math.max(0, Math.floor(Number(n) || 0));
   try { localStorage.setItem("capivara-wins", JSON.stringify({ wins: SESSION.wins })); } catch {}
 }
+// modos: "meta" (chegar na meta; bater tira metros) e "infinito" (sem meta; bater acaba a run)
+const infinite = () => C.mode === "infinito";
+// coisas que ficam salvas entre as runs: cabeças de capivara, recorde do modo infinito e a palavra do dia
+const SAVE = { keys: 0, best: 0, word: { day: "", n: 0 } };
+try { Object.assign(SAVE, JSON.parse(localStorage.getItem("capivara-save")) || {}); } catch {}
+function store() { try { localStorage.setItem("capivara-save", JSON.stringify(SAVE)); } catch {} }
+function saveBest() {
+  if (infinite() && S.dist > SAVE.best) { SAVE.best = Math.floor(S.dist); store(); }
+}
+// avisos rápidos no centro da tela (recorde, letra, cabeça…); aparecem mesmo com os popups desligados
+function note(a, b = "", col = "#fff") { S.notes.push({ a, b, col, t: 2.4 }); if (S.notes.length > 3) S.notes.shift(); }
+
+// ---------- caça às letras: uma palavra por dia, as letras aparecem na pista em ordem ----------
+const WORDS = ["CAPIVARA", "TRILHO", "VAGAO", "MOEDA", "CORRIDA", "PRANCHA", "RAMPA", "ESTACAO", "APITO", "VIAGEM", "TUNEL", "LANTERNA", "MOCHILA", "FOGUETE", "SURFISTA", "PIPOCA"];
+function today() { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; }
+function dayWord() {
+  const d = today();
+  if (SAVE.word.day !== d) { SAVE.word = { day: d, n: 0 }; store(); } // virou o dia: palavra nova
+  let h = 0; for (const c of d) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return WORDS[h % WORDS.length];
+}
+const wordDone = () => SAVE.word.n >= dayWord().length;
+function gotLetter() {
+  const w = dayWord(); SAVE.word.n++; store();
+  S.letterOut = false; S.letterCD = rnd(500, 900);
+  Sound.play("power");
+  if (SAVE.word.n >= w.length) {
+    SAVE.keys += 2; store(); S.coins += 500;
+    note(`🔤 ${w}!`, `palavra do dia completa · +2 ${CAPY} +500 🪙`, "#ffd23f");
+    confettiBurst(80, W / 2, H * 0.35, 0.8); Sound.play("fanfare");
+  } else note(`LETRA ${w[SAVE.word.n - 1]}`, `${SAVE.word.n}/${w.length} da palavra do dia`, "#d6a8ff");
+}
+// coloca uma letra (ou uma cabeça de capivara) no lugar de uma moeda do chão do bloco novo
+function swapCoin(items, obj) {
+  const spots = items.filter(o => o.t === "coin" && o.y < 1.5);
+  if (!spots.length) return false;
+  const c = pick(spots); Object.assign(c, obj, { y: 1 });
+  return true;
+}
+
 // ordem sorteada uma vez por sessão: sem país escolhido no painel, o primeiro dela fica fixo
 const THEME_ORDER = TH.map((_, i) => i).sort(() => Math.random() - 0.5);
 reset();
 
 // ---------- configurações do painel (admin.html) ----------
-const SETTINGS_KEYS = ["goalMeters", "crashPenaltyMeters", "likesPerPushback", "likePushbackMeters", "donationRules", "theme", "skin", "binds", "testKeys", "giftBinds", "autoRestartSec", "showLegend", "likeRules", "hud", "hudTop", "shortcuts", "sound"];
+const SETTINGS_KEYS = ["mode", "botCoins", "giftFallback", "goalMeters", "crashPenaltyMeters", "likesPerPushback", "likePushbackMeters", "donationRules", "theme", "skin", "binds", "testKeys", "giftBinds", "autoRestartSec", "showLegend", "likeRules", "hud", "hudTop", "shortcuts", "sound"];
 function applySettings(o) {
   if (!o || typeof o !== "object") return;
-  const prevTheme = C.theme;
+  const prevTheme = C.theme, prevMode = C.mode;
   for (const k of SETTINGS_KEYS) if (o[k] !== undefined) C[k] = o[k];
+  if (o.donationRules) loadCatalog(); // regras novas: completa as imagens pelo catálogo
+  if (S && C.mode !== prevMode && (S.state === "run" || S.state === "over")) { reset(); S.state = "run"; Sound.startMusic(); }
   if (C.theme !== prevTheme) refreshScenery();
   if (o.sound) Sound.setVolumes(o.sound);
 }
 // troca de país: refaz as decorações na hora em vez de esperar o caminho renovar
 function refreshScenery() { S.deco = []; S.over = []; S.decoReady = false; }
 try { applySettings(JSON.parse(localStorage.getItem("capivara-settings"))); } catch {}
+loadCatalog();
 if (location.protocol.startsWith("http"))
   fetch("/api/settings").then(r => r.ok ? r.json() : null).then(applySettings).catch(() => {});
 
@@ -162,7 +207,10 @@ function spawnChunk() {
   let r = Math.random() * pool.reduce((a, c) => a + weight(c), 0), ch = pool[0];
   for (const c of pool) { r -= weight(c); if (r <= 0) { ch = c; break; } }
   S.lastChunk = ch;
-  S.queue.push(...buildChunk(ch, FAR + 1, k, Math.random() < 0.5));
+  const items = buildChunk(ch, FAR + 1, k, Math.random() < 0.5);
+  if (!S.letterOut && S.letterCD <= 0 && !wordDone() && swapCoin(items, { t: "letter", ch: dayWord()[SAVE.word.n] })) S.letterOut = true;
+  if (Math.random() < 0.03) swapCoin(items, { t: "key" }); // cabeça de capivara: rara (uma a cada minuto e meio, mais ou menos)
+  S.queue.push(...items);
   S.queue.sort((a, b) => a.z - b.z);
   S.nextSpawn = (ch.rows.length + CHUNK_GAP) * CHUNK_STEP * k;
 }
@@ -219,24 +267,25 @@ function wallAt(lane, climb = false) {
 // regra mais específica primeiro: presente escolhido (pelo ID oficial da TikTok, ou pelo nome) e depois maior valor mínimo
 // regras de um presente escolhido pedem uma QUANTIDADE daquele presente (ex.: 5× Rosa num combo);
 // regras de "qualquer presente" pedem um valor mínimo em moedas
-function ruleFor(ev, coins) {
-  const name = String(ev.gift || "").trim().toLowerCase(), id = ev.giftId ? String(ev.giftId) : "";
-  const specific = r => !!(r.giftId || r.gift);
-  const matches = r => !specific(r) || (r.giftId ? String(r.giftId) === id : String(r.gift).trim().toLowerCase() === name);
-  const count = r => Number(ev.count) || Math.max(1, Math.round(coins / Math.max(1, Number(r.giftCoins) || coins)));
-  const enough = r => specific(r) ? count(r) >= (Number(r.minCount) || 1) : coins >= (Number(r.minCoins) || 0);
-  const weight = r => specific(r) ? (Number(r.minCount) || 1) * (Number(r.giftCoins) || 1) : Number(r.minCoins) || 0;
-  return (C.donationRules || []).slice().sort((a, b) => (specific(b) - specific(a)) || weight(b) - weight(a)).find(r => matches(r) && enough(r));
+// a regra vem de rules.js (o painel usa a mesma), com o "presente fora da lista → o de valor mais próximo, ajudando"
+function ruleFor(ev, coins) { return GiftRules.pick(C.donationRules, ev, coins, C.giftFallback !== false); }
+// catálogo oficial dos presentes (o servidor monta durante a live): completa imagem, ID e valor das regras pelo nome
+function loadCatalog() {
+  if (!location.protocol.startsWith("http")) return;
+  fetch("/api/gifts").then(r => r.ok ? r.json() : null).then(d => { if (d && d.gifts) GiftRules.resolve(C.donationRules, d.gifts); }).catch(() => {});
 }
 function donate(ev) {
   const coins = Math.max(1, Number(ev.coins) || 1);
   const rule = ev.rule || (ev.ruleIndex != null ? (C.donationRules || [])[ev.ruleIndex] : null) || ruleFor(ev, coins);
   if (!rule) return;
-  if (S.state === "win") return; // partida já acabou
-  const m = Number(rule.meters) || 0; // > 0 atrapalha (volta), < 0 ajuda (avança)
-  const win = rule.effect === "win";
+  if (S.state === "win" || S.state === "over") return; // partida já acabou
+  if (infinite()) return; // modo infinito é só o jogador: presentes não ajudam nem atrapalham
+  // perGift: os metros valem por unidade (um combo de 5 Rosas = 5 × os metros da Rosa)
+  const units = rule.perGift ? Math.max(1, Number(ev.count) || 1) : 1;
+  const m = (Number(rule.meters) || 0) * units; // > 0 atrapalha (volta), < 0 ajuda (avança)
+  const win = rule.effect === "win", zera = rule.effect === "zera";
   const before = S.dist;
-  S.dist = win ? C.goalMeters : Math.min(C.goalMeters - 1, Math.max(0, S.dist - m));
+  S.dist = win ? C.goalMeters : zera ? 0 : Math.min(C.goalMeters - 1, Math.max(0, S.dist - m));
   applyEffect(rule.effect);
   const help = win || m < 0 || (FX[rule.effect] || {}).kind === "help";
   // simulação (atalhos, teclas de teste, painel) não mostra nome de ninguém: só o presente e o efeito
@@ -264,7 +313,7 @@ function donate(ev) {
 
   react(help ? "laugh" : "shock", help ? 2.5 : 1.8);
   const fxLabel = rule.effect && FX[rule.effect] && !win ? " " + FX[rule.effect].label.split(" ")[0] : "";
-  const effect = win ? "VITÓRIA!" : `${m > 0 ? "−" : "+"}${Math.abs(m).toLocaleString("pt-BR")} m${fxLabel}`;
+  const effect = win ? "VITÓRIA!" : zera ? "ZEROU! 0 m" : `${m > 0 ? "−" : "+"}${Math.abs(m).toLocaleString("pt-BR")} m${fxLabel}`;
   if (win) S.winner = who || giftName || "um presente";
   // simulação sem presente (atalho de teclado, likes): título pelo tipo, nunca "teste"
   const title = ev.title || (ev.sim && !giftName ? (win ? "🏆 VITÓRIA!" : help ? "😇 AJUDA!" : "😈 SABOTAGEM!") : "");
@@ -283,9 +332,19 @@ function giftImage(url) {
 function applyEffect(e) {
   if (e === "win") return; // tratado em donate(): leva direto à vitória com o nome de quem doou
   if (e === "train") {
-    // remove o que estiver no caminho para o trem não atravessar nada
-    S.objs = S.objs.filter(o => !(o.lane === S.lane && o.z > 55 && o.z < 100));
-    addTrain(S.lane, 70, { d: 22, col: "#e8525c", num: 666 });
+    // com o bot jogando, o trem surge mais longe: dá tempo de sair até de um corredor de vagões
+    // (o bot nunca atravessa nada; uma pessoa tem o trem mais perto, porque é uma sabotagem)
+    // e nunca fecha as três pistas: procura um ponto em que uma pista do lado fique livre durante o trem todo
+    const all = [...S.objs, ...S.queue], wall = o => o.t === "train" || o.t === "ramp";
+    const busy = (lane, z0, z1) => all.some(o => wall(o) && o.lane === lane && o.z < z1 && o.z + o.d > z0);
+    const side = [S.lane - 1, S.lane + 1].filter(l => l >= -1 && l <= 1);
+    let z = BOT.on ? 100 : 70;
+    while (z < 150 && !side.some(l => !busy(l, z - 12, z + 22 + 12))) z += 4;
+    if (z >= 150) return; // nenhum lugar justo agora: o trem não aparece (melhor que uma batida impossível de evitar)
+    const clear = o => !(o.lane === S.lane && o.z > z - 15 && o.z < z + 30);
+    S.objs = S.objs.filter(clear); S.queue = S.queue.filter(clear); // remove o que estiver no caminho
+    addTrain(S.lane, z, { d: 22, col: "#e8525c", num: 666 });
+    if (z > FAR) { const t = S.objs.pop(); S.queue.push(t); S.queue.sort((a, b) => a.z - b.z); } // além do horizonte: entra pela fila
   }
   if (e === "speed") S.speedFx = 10;
   if (e === "slow") S.slowFx = 10;
@@ -302,6 +361,7 @@ function likeRules() {
   return C.likesPerPushback > 0 ? [{ every: C.likesPerPushback, meters: C.likePushbackMeters, effect: "" }] : [];
 }
 function onLike(n) {
+  if (S.state === "over" || infinite()) return; // likes também não contam no modo infinito
   S.likes += n;
   likeRules().forEach((r, i) => {
     S.likeCounts[i] = (S.likeCounts[i] || 0) + n;
@@ -325,6 +385,7 @@ function command(c) {
   if (c.type === "like") onLike(c.count || 1);
   if (c.type === "follow") Sound.play("follow");
   if (c.type === "settings") applySettings(c.settings);
+  if (c.type === "gifts") loadCatalog(); // catálogo de presentes atualizado pelo servidor
   if (c.type === "bot") toggleBot();
   if (c.type === "pause") togglePause();
   if (c.type === "restart") { const p = S.paused; reset(); S.state = "run"; if (!p) Sound.startMusic(); }
@@ -340,7 +401,7 @@ function togglePause() {
 // estado atual para o painel (mesmo navegador via localStorage, ou pelo servidor)
 let WS = null;
 setInterval(() => {
-  const st = { type: "status", state: S.state, paused: S.paused, bot: BOT.on, dist: Math.floor(S.dist), goal: C.goalMeters, theme: S.theme && S.theme.name, themeMode: C.theme || "", coins: S.coins, wins: SESSION.wins };
+  const st = { type: "status", mode: infinite() ? "infinito" : "meta", best: SAVE.best, keys: SAVE.keys, state: S.state, paused: S.paused, bot: BOT.on, dist: Math.floor(S.dist), goal: C.goalMeters, theme: S.theme && S.theme.name, themeMode: C.theme || "", coins: S.coins, wins: SESSION.wins };
   try { localStorage.setItem("capivara-status", JSON.stringify(st)); } catch {}
   if (WS && WS.readyState === 1) WS.send(JSON.stringify(st));
 }, 500);
@@ -363,9 +424,10 @@ addEventListener("storage", e => {
 })();
 
 // ---------- controles ----------
-function start() { if (S.state === "menu" || S.state === "win") { reset(); S.state = "run"; Sound.startMusic(); } }
+function start() { if (S.state === "menu" || S.state === "win" || S.state === "over") { reset(); S.state = "run"; Sound.startMusic(); } }
 function act(a, fromBot) {
   if (S.state === "menu") { if (!fromBot) menuKey(a); return; }
+  if (S.state === "over") { if (!fromBot && (a === "up" || a === "down")) overMove(a === "down" ? 1 : -1); return; }
   if (S.state !== "run") { if (!fromBot) start(); return; }
   if (S.paused) return;
   if (S.reverseFx > 0) a = { left: "right", right: "left", up: "down", down: "up" }[a];
@@ -388,6 +450,8 @@ addEventListener("keydown", e => {
       e.preventDefault(); return;
     }
   }
+  // fim da run: setas escolhem, Enter confirma
+  if (S.state === "over" && !e.repeat && (e.code === "Enter" || e.code === "NumpadEnter")) { overChoose(); e.preventDefault(); return; }
   // na pausa: setas escolhem entre Continuar e Menu principal, Enter confirma
   if (S.paused && !e.repeat) {
     const a0 = actionFor(e.code);
@@ -439,18 +503,20 @@ function canvasPoint(e) {
 }
 cv.addEventListener("pointermove", e => {
   if (MENU.dragging) return MENU.dragging.drag(canvasPoint(e)[0]);
-  if (S.state === "menu" || S.paused) menuHover(...canvasPoint(e));
+  if (S.state === "menu" || S.paused || S.state === "over") menuHover(...canvasPoint(e));
 });
 cv.addEventListener("pointerup", e => {
   if (MENU.dragging) { const k = MENU.dragging.key; MENU.dragging = null; saveVolumes(k); return; } // soltou a barra: salva uma vez só
-  if (S.state === "menu" || S.paused) return menuClick(...canvasPoint(e));
+  if (S.state === "menu" || S.paused || S.state === "over") return menuClick(...canvasPoint(e));
+  const [px, py] = canvasPoint(e);
+  if (S.state === "run" && inPauseButton(px, py)) return togglePause(); // botão de pausa do canto
   const dx = e.clientX - tx, dy = e.clientY - ty;
   if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return act("up");
   act(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up"));
 });
 
 // ---------- bot (tecla B): reage com atraso humano, se mexe o tempo todo e nunca é punido por bater ----------
-const BOT = { on: false, wait: 0, idle: 0.5 };
+const BOT = { on: false, wait: 0, idle: 0.5, cool: 0 };
 function toggleBot() {
   BOT.on = !BOT.on;
   if (BOT.on) start();
@@ -472,73 +538,172 @@ function humanBurst() {
   const n = 1 + Math.floor(-Math.log(1 - Math.random()) * 6); // geralmente curta, às vezes bem longa
   BOT.burst = { i: 0, keys: Array.from({ length: Math.min(n, 30) }, () => pick(["up", "down", "left", "right"])) };
 }
-// segundos até um trem bloquear a pista (0 = bloqueada agora, Infinity = livre)
-function laneDanger(lane) {
-  if (floorAt(lane, Infinity, false) - S.y > STEP) return 0;
+// ---------- previsões do bot: ele só faz o que um jogador conseguiria fazer ----------
+// altura do personagem daqui a t segundos, sem apertar nada (no chão fica onde está)
+// (a física anda quadro a quadro, ~1/60 s, o que deixa o pulo um pouco mais baixo que a conta exata: o termo t/60 corrige)
+const fall = t => 19 * t * (t + 1 / 60);
+function yAt(t) { return S.grounded ? S.y : Math.max(0, S.y + S.vy * t - fall(t)); }
+// altura de um trem/rampa na posição do jogador daqui a t segundos (0 = ainda não chegou ou já passou)
+function solidH(o, t) {
+  const z = o.z - (runSpeed() + (o.move || 0)) * t;
+  if (PZ < z || PZ > z + o.d) return 0;
+  return o.t === "train" ? TRAIN_H : TRAIN_H * (PZ - z) / o.d;
+}
+const BOT_SIDE = 0.24; // a troca de pista leva ~0,2 s: nesse tempo a pista nova não pode ter parede do lado
+function sideClear(lane) {
+  for (const o of S.objs) {
+    if (o.lane !== lane || o.passed || (o.t !== "train" && o.t !== "ramp")) continue;
+    for (let t = 0; t <= BOT_SIDE; t += 0.02) if (solidH(o, t) - Math.min(S.y, yAt(t)) > STEP) return false;
+  }
+  return true;
+}
+// segundos até bater de frente num trem nesta pista, estando nela a partir de tA (Infinity = livre)
+function frontDanger(lane, tA = 0) {
+  const v = runSpeed();
+  if (lane === S.lane && wallAt(lane, true)) return 0;
+  // no teto de um trem desta pista: trens que chegam antes do teto acabar ficam na mesma altura
+  let roofEnd = -1;
+  if (yAt(tA) >= TRAIN_H - STEP) for (const o of S.objs)
+    if (o.lane === lane && o.t === "train" && !o.passed && solidH(o, tA) >= TRAIN_H) roofEnd = Math.max(roofEnd, (o.z + o.d - PZ) / (v + (o.move || 0)));
   let t = Infinity;
   for (const o of S.objs) {
-    if (o.lane !== lane || o.t !== "train" || o.z <= PZ) continue;
-    if (S.objs.some(r => r.t === "ramp" && r.lane === lane && Math.abs(r.z + r.d - o.z) < 0.5 && r.z > PZ - 0.5)) continue;
-    t = Math.min(t, (o.z - PZ) / (runSpeed() + (o.move || 0)));
+    if (o.lane !== lane || o.passed || o.t !== "train") continue;
+    const tf = (o.z - PZ) / (v + (o.move || 0));
+    if (tf <= 0) continue;                       // já está do lado: quem cuida é o sideClear
+    if (tf < roofEnd + 0.15) continue;            // emenda com o teto em que ele está
+    const ramp = S.objs.find(r => r.t === "ramp" && r.lane === lane && !r.passed && Math.abs(r.z + r.d - o.z) < 0.6);
+    // trem com rampa: dá para subir, se chegar na pista antes da rampa ou se já estiver subindo por ela
+    if (ramp && ((ramp.z - PZ) / v > tA || (lane === S.lane && solidH(ramp, 0) > 0 && S.y >= solidH(ramp, 0) - STEP))) continue;
+    t = Math.min(t, tf);
   }
   return t;
 }
 // barreiras que ainda não passaram totalmente pelo jogador, da mais próxima à mais distante
 function barriersIn(lane) {
-  return S.objs.filter(o => o.lane === lane && BARRIERS.includes(o.t) && o.z + 0.6 > PZ - 0.6).sort((a, b) => a.z - b.z);
+  return S.objs.filter(o => o.lane === lane && BARRIERS.includes(o.t) && !o.hit && o.z + 0.6 > PZ - 0.6).sort((a, b) => a.z - b.z);
 }
-function laneSafeToEnter(lane) {
+// need: quanto tempo livre a pista precisa ter depois da troca (troca planejada pede folga; fuga aceita menos)
+function laneSafeToEnter(lane, need = 0.5) {
+  if (lane < -1 || lane > 1 || !sideClear(lane) || frontDanger(lane, BOT_SIDE) < need) return false;
   const b = barriersIn(lane)[0];
-  return laneDanger(lane) > 0.4 && !(b && (b.z - PZ) / runSpeed() < 0.45);
+  return !(b && (b.z - PZ) / runSpeed() < 0.4); // barreira perto demais para dar tempo de reagir
 }
+const botAvoidsCoins = () => C.botCoins === false;
+const coinNear = (lane, z0, z1) => S.objs.some(o => o.t === "coin" && Math.round(o.lane) === lane && o.z > z0 && o.z < z1);
 function botUpdate(dt) {
   if (!BOT.on || S.state !== "run") return;
-  BOT.wait -= dt; BOT.idle -= dt;
+  BOT.wait -= dt; BOT.idle -= dt; BOT.cool -= dt;
+  if (botReflex()) { BOT.wait = Math.max(BOT.wait, rnd(0.1, 0.2)); return; }
   if (BOT.wait > 0) return;
-  const pl = S.lane, look = 3, v = runSpeed();
+  const pl = S.lane, look = 3, v = runSpeed(), noCoins = botAvoidsCoins();
+  // segurança primeiro: moedas só desempatam entre pistas seguras (desviar de moeda nunca leva para um trem)
   const score = l => {
-    const d = laneDanger(l);
-    let s = Math.min(d, look) * 10 - Math.abs(l - pl) * 1.5 + (l === pl ? 1 : 0);
-    for (const o of S.objs) if (o.lane === l && o.t === "coin" && o.z > PZ && o.z < PZ + v * 1.5) s += 0.6;
-    for (const o of S.objs) if (o.lane === l && o.t === "ramp" && o.z > PZ) s += 2;
-    return s;
+    const d = frontDanger(l, l === pl ? 0 : BOT_SIDE);
+    let s = Math.min(d, look) * 10 - Math.abs(l - pl) * 1.5 + (l === pl ? 1 : 0), extra = 0;
+    for (const o of S.objs) {
+      if (Math.round(o.lane) !== l || o.z <= PZ) continue;
+      if (!noCoins) { if (o.t === "coin" && o.z < PZ + v * 1.5) extra += 0.6; if (o.t === "ramp") extra += 2; continue; }
+      // sem moedas: olha mais longe; moeda em arco, no teto ou colada numa barreira não dá para pular (pesa mais)
+      if (o.t === "coin" && o.z < PZ + v * 2.5) extra -= o.y > 1.3 || S.objs.some(b => BARRIERS.includes(b.t) && b.lane === l && Math.abs(b.z - o.z) < 5) ? 2 : 0.7;
+      if (o.t === "ramp") extra -= 3;                             // rampa leva ao teto, que sempre tem moedas
+      if (o.t === "power" && o.z < PZ + v * 2.5) extra -= o.kind === "magnet" ? 12 : o.kind === "double" ? 5 : 0; // ímã puxa as moedas; 2X dobra
+    }
+    return s + (d >= (noCoins ? 1.6 : look) ? Math.max(noCoins ? -16 : -6, Math.min(6, extra)) : 0);
   };
-  // 1) escolher a melhor pista e andar uma pista por vez, se a próxima estiver segura
+  // 1) escolher a melhor pista e andar uma pista por vez, se a próxima der para entrar
   const best = [-1, 0, 1].reduce((a, b) => score(b) > score(a) ? b : a, pl);
   if (best !== pl) {
     const step = best > pl ? 1 : -1;
-    if (laneSafeToEnter(pl + step)) return botPress(step > 0 ? "right" : "left");
+    // a pista escolhida é a mais segura; a do meio, se for só de passagem, precisa de folga só para a próxima troca
+    if (laneSafeToEnter(pl + step, 0.6)) return botPress(step > 0 ? "right" : "left");
   }
-  // 2) pular ou rolar barreiras da pista atual
-  const ahead = S.floor < 0.1 && barriersIn(pl)[0];
-  if (ahead) {
-    if (ahead.z < PZ + 0.5) return; // passando pela barreira agora: mantém o pulo/rolamento
-    const t = (ahead.z - PZ) / v;
-    ahead.react = ahead.react || rnd(0.2, 0.36);
-    if (t < ahead.react) {
-      const want = ahead.t === "low" ? "up" : ahead.t === "high" ? "down" : (ahead.choice = ahead.choice || pick(["up", "down"]));
-      if (want === "up" && S.grounded && S.roll <= 0) return botPress("up");
-      if (want === "down" && S.roll <= 0.15 && S.y < 0.6) return botPress("down");
-    }
-    if (t < 1) { BOT.burst = null; return; } // concentrado: nada de spam perto de obstáculo
-  }
-  // 3) spam de teclas como uma pessoa apertando tudo: s d a w a d s a w…
+  // 2) spam de teclas como uma pessoa apertando tudo: s d a w a d s a w… (só longe de qualquer perigo)
+  const calm = frontDanger(pl) > 1.6 && !(barriersIn(pl)[0] && (barriersIn(pl)[0].z - PZ) / v < 1.4);
+  if (!calm) { BOT.burst = null; return; }
   if (BOT.burst) {
     const b = BOT.burst, key = b.keys[b.i++];
     if (b.i >= b.keys.length) { BOT.burst = null; BOT.idle = spamGap(); }
     if (key === "left" || key === "right") {
       // pista perigosa: a tecla "escorrega" (não troca de pista), mas o spam continua
       const nl = pl + (key === "right" ? 1 : -1);
-      if (nl >= -1 && nl <= 1 && (!laneSafeToEnter(nl) || laneDanger(nl) < 1)) { BOT.wait = spamGap(); return; }
+      if (nl >= -1 && nl <= 1 && !laneSafeToEnter(nl, 1.2)) { BOT.wait = spamGap(); return; }
     }
+    if (noCoins && (key === "down" || key === "up") && coinNear(pl, PZ - 1, PZ + v * 1.2)) { BOT.wait = spamGap(); return; } // pular/rolar perto de moeda pega moeda
+    if (noCoins && (key === "left" || key === "right") && coinNear(pl + (key === "right" ? 1 : -1), PZ - 1, PZ + v * 0.8)) { BOT.wait = spamGap(); return; }
     return botPress(key, true);
   }
-  if (BOT.idle <= 0 && laneDanger(pl) > 1.2) { BOT.idle = spamGap(); return humanBurst(); }
+  if (BOT.idle <= 0) { BOT.idle = spamGap(); return humanBurst(); }
+}
+// "custo" de moedas que o personagem vai pegar seguindo a altura y(t) nos próximos `horizon` segundos: a moeda passa
+// por PZ entre z = PZ + 0,5 e PZ − 1,1 e é pega se a altura do personagem + 0,8 ficar a menos de 1,6 dela.
+// O ímã custa muito mais: ele puxa todas as moedas por 12 s.
+function coinCost(yf, horizon) {
+  const v = runSpeed(), pl = S.lane;
+  let cost = 0;
+  for (const o of S.objs) {
+    const magnet = o.t === "power" && o.kind === "magnet", dbl = o.t === "power" && o.kind === "double";
+    if (!(o.t === "coin" || magnet || dbl) || Math.round(o.lane) !== pl || o.z < PZ - 1.1) continue;
+    const t0 = Math.max(0, (o.z - PZ - 0.5) / v), t1 = (o.z - PZ + 1.1) / v;
+    if (t0 > horizon) continue;
+    for (let t = t0; t <= t1; t += 0.01) if (Math.abs(o.y - (yf(t) + 0.8)) < 1.75) { cost += magnet ? 25 : dbl ? 8 : 1; break; } // 1,75 = 1,6 + margem
+  }
+  return cost;
+}
+// vale pular agora? compara pular agora com não pular e com pular mais tarde (de 0,04 em 0,04 s): só pula se
+// agora for o melhor momento. Pular cedo demais desperdiça o pulo: no ar não dá para pular de novo, e a queda
+// pode cair em cima de moedas ou do ímã
+function coinJumpNow() {
+  const fl = S.floor, ride = t => Math.max(fl, yAt(t)), H = 1.1;
+  const jumpAt = d => t => t < d ? ride(t) : Math.max(fl, ride(d) + 13 * (t - d) - fall(t - d));
+  const stay = coinCost(ride, H);
+  if (!stay) return false;
+  const now = coinCost(jumpAt(0), H);
+  if (now >= stay) return false;
+  for (let d = 0.04; d <= 0.6; d += 0.04) if (coinCost(jumpAt(d), H) < now) return false; // esperar é melhor
+  return true;
+}
+// tecla do bot: com os controles invertidos ele aperta o contrário (como uma pessoa que percebeu a inversão)
+function botAct(a) { act(S.reverseFx > 0 ? { left: "right", right: "left", up: "down", down: "up" }[a] : a, true); }
+// reflexos (todo quadro, mesmo no meio do spam): fugir de trem, passar por barreira e, sem moedas, pular moedas
+function botReflex() {
+  const pl = S.lane, v = runSpeed();
+  // 1) trem chegando de frente nesta pista: troca para a pista do lado que estiver livre
+  const d = frontDanger(pl);
+  if (d < 0.85 && BOT.cool <= 0) { // (cool: não aperta duas trocas de pista seguidas sem querer)
+    const opts = [pl - 1, pl + 1].filter(l => laneSafeToEnter(l)).sort((a, b) => frontDanger(b, BOT_SIDE) - frontDanger(a, BOT_SIDE));
+    if (opts.length && frontDanger(opts[0], BOT_SIDE) > d) { botAct(opts[0] > pl ? "right" : "left"); BOT.cool = 0.15; return true; }
+  }
+  // 2) barreira na pista: pula (cerca e barra) ou rola (barra e painel), com o atraso de reação de uma pessoa
+  const b = S.y < TRAIN_H - STEP && barriersIn(pl)[0];
+  if (b && b.z > PZ + 0.3) {
+    const t = (b.z - PZ) / v;
+    b.react = b.react || rnd(0.2, 0.34);
+    if (t < b.react) {
+      const canJump = S.grounded || S.jumps > 0, top = BAR_TOP[b.t] - STEP;
+      const clears = yAt(t) >= top;                                      // já vai passar por cima sem fazer nada
+      const rollOk = b.t !== "low" && S.roll > t + 0.05 && yAt(t) < 0.6; // já vai passar rolando
+      if (clears || rollOk) return false;
+      if (!b.choice && botAvoidsCoins() && b.t === "mid") { // pula ou rola: o caminho que pega menos moedas
+        const fl = S.floor, jump = tt => tt < t ? fl : fl + 13 * (tt - t) - fall(tt - t);
+        b.choice = coinCost(jump, t + 0.8) < coinCost(() => fl, t + 0.8) ? "up" : "down";
+      }
+      let want = b.t === "low" ? "up" : b.t === "high" ? "down" : (b.choice = b.choice || pick(["up", "down"]));
+      if (want === "up" && !canJump) want = b.t === "low" ? "" : "down"; // sem pulo: na barra ainda dá para rolar
+      if (want === "up" && 13 * t - fall(t) + S.y < top) want = b.t === "low" ? "up" : "down";
+      if (want) { botAct(want); return true; }
+      // cerca baixa sem pulo: só sobra trocar de pista
+      const alt = [pl - 1, pl + 1].filter(l => laneSafeToEnter(l));
+      if (alt.length && BOT.cool <= 0) { botAct(pick(alt) > pl ? "right" : "left"); BOT.cool = 0.15; return true; }
+    }
+  }
+  // 3) sem moedas: pula na hora certa para passar por cima das moedas que vêm chegando
+  if (botAvoidsCoins() && (S.grounded || S.jumps > 0) && !(b && (b.z - PZ) / v < 0.9) && coinJumpNow()) { botAct("up"); return true; }
+  return false;
 }
 
 // ---------- update ----------
 function runSpeed() {
-  return S.speed * (S.speedFx > 0 ? 1.4 : 1) * (S.slowFx > 0 ? 0.7 : 1) * (S.stumble > 0 ? 0.5 : 1);
+  return S.speed * (S.speedFx > 0 ? 1.4 : 1) * (S.slowFx > 0 ? 0.7 : 1) * (S.stumble > 0 ? 0.5 : 1) * (1 - DIZZY_SLOW * Math.min(1, S.dizzy));
 }
 function crash() {
   if (BOT.on || S.invuln > 0 || S.shield > 0) return; // com o bot ligado ele atravessa sem penalidade
@@ -546,10 +711,45 @@ function crash() {
   Sound.play("crash");
   react("shock", 1.6);
   S.crashes = (S.crashes || 0) + 1;
+  if (infinite()) return gameOver();
   S.dist = Math.max(0, S.dist - C.crashPenaltyMeters);
   S.speed = Math.max(C.startSpeed, S.speed * 0.8);
   S.invuln = 2; S.stumble = 0.6;
   popup("BATEU 💥", `-${C.crashPenaltyMeters} m`, "#ff7b39");
+}
+// esbarrão de lado: o 1º deixa meio tonto por alguns segundos (estrelinhas na cabeça e corre um pouco mais
+// devagar, mas continua correndo); esbarrar de novo ainda tonto = cai (igual a bater de frente)
+const DIZZY_SECS = 4, DIZZY_SLOW = 0.2; // 20% mais devagar, voltando ao normal no último segundo
+function bump() {
+  if (S.invuln > 0) return;
+  if (S.dizzy > 0) { S.dizzy = 0; return crash(); }
+  S.dizzy = DIZZY_SECS;
+}
+// ---------- fim da run (modo infinito) ----------
+const continueCost = () => 2 ** S.continues; // 1, 2, 4, 8… cabeças de capivara na mesma run
+function gameOver() {
+  S.state = "over"; S.overT = 0; S.stumble = 0.6;
+  S.newBest = S.dist > SAVE.best;
+  saveBest();
+  Sound.stopMusic();
+  MENU.sel = SAVE.keys >= continueCost() ? 0 : 1; // sem cabeças de capivara suficientes, "Jogar de novo" vem selecionado
+}
+function overMove(d) {
+  MENU.sel = (MENU.sel + d + 3) % 3;
+  if (MENU.sel === 0 && SAVE.keys < continueCost()) MENU.sel = (MENU.sel + d + 3) % 3; // pula o "Continuar" sem cabeças de capivara
+  Sound.play("lane");
+}
+function overChoose() { [continueRun, () => start(), () => openMenu()][MENU.sel](); }
+// continua de onde bateu: gasta as cabeças de capivara, tira os obstáculos da frente e dá alguns segundos piscando
+function continueRun() {
+  const cost = continueCost();
+  if (SAVE.keys < cost) return Sound.play("lane");
+  SAVE.keys -= cost; store(); S.continues++;
+  S.objs = S.objs.filter(o => !(["train", "ramp", ...BARRIERS].includes(o.t) && o.z < PZ + 45 && o.z + (o.d || 1) > PZ - 3));
+  S.y = 0; S.vy = 0; S.floor = 0; S.camBase = 0; S.grounded = true; S.jumps = 1;
+  S.state = "run"; S.invuln = 3; S.stumble = 0; S.dizzy = 0;
+  Sound.startMusic(); Sound.play("power");
+  note(`CONTINUA! ${CAPY}`, `-${cost} ${cost === 1 ? "cabeça" : "cabeças"} de capivara`, "#ffd23f");
 }
 function sparkle(x, y, z, col, n) {
   const [sx, sy, s] = proj(x, y, z);
@@ -567,6 +767,11 @@ function update(dt) {
   if (S.paused) return;
   S.t += dt;
   S.popups.forEach(p => p.t -= dt); S.popups = S.popups.filter(p => p.t > 0);
+  S.notes.forEach(n => n.t -= dt); S.notes = S.notes.filter(n => n.t > 0);
+  if (S.state === "over") { // nova run sozinha depois de alguns segundos (para a live não ficar parada)
+    S.overT += dt;
+    if (C.autoRestartSec > 0 && S.overT > C.autoRestartSec) start();
+  }
   S.feed.forEach(f => f.t += dt);
   S.legendX += dt * 80;
   updateHype(dt);
@@ -603,7 +808,9 @@ function update(dt) {
   S.speed = Math.min(C.maxSpeed, S.speed + C.speedGainPerSec * dt);
   const dz = runSpeed() * dt;
   S.dist += dz;
-  ["invuln", "stumble", "roll", "speedFx", "slowFx", "reverseFx", "darkFx", "boardTime", "magnet", "double", "shield"].forEach(k => S[k] = Math.max(0, S[k] - dt));
+  S.letterCD -= dz;
+  if (infinite() && !S.newBest && SAVE.best > 0 && S.dist > SAVE.best) { S.newBest = true; note("🏆 NOVO RECORDE!", "", "#ffd23f"); Sound.play("fanfare"); }
+  ["invuln", "stumble", "dizzy", "roll", "speedFx", "slowFx", "reverseFx", "darkFx", "boardTime", "magnet", "double", "shield"].forEach(k => S[k] = Math.max(0, S[k] - dt));
   S.memeTimer -= dt;
   if (S.memeTimer <= 0) { S.memeTimer = rnd(8, 15); popup(pick(C.memes), "", "#fff"); }
 
@@ -630,11 +837,22 @@ function update(dt) {
   const changing = S.prevLane !== undefined && S.prevLane !== pl && Math.abs(S.x - pl * LANE) > 0.25;
   const wall = wallAt(pl, !changing);
   if (wall) {
+<<<<<<< Updated upstream
     if (BOT.on) wall.passed = true;                       // bot atravessa sem penalidade
     else if (changing && !wallAt(S.prevLane)) {           // bateu de lado trocando de pista: quica de volta
       S.lane = S.prevLane; S.stumble = Math.max(S.stumble, 0.3);
       Sound.play("lane"); react("shock", 0.8);
     } else { crash(); wall.passed = true; }               // de frente: perde metros e atravessa piscando
+=======
+    if (changing && !wallAt(S.prevLane)) {                // esbarrou de lado trocando de pista: quica de volta (o bot também)
+      if (S.lane !== S.prevLane) {                         // (já voltando de um esbarrão: não conta de novo)
+        S.lane = S.prevLane;
+        Sound.play("lane"); react("shock", 0.8);
+        bump();
+      }
+    } else { crash(); wall.passed = true; }               // de frente: cai direto (perde metros ou acaba a run;
+                                                          // com o bot, crash() não pune: é a rede de segurança)
+>>>>>>> Stashed changes
   }
   S.floor = floorAt(Math.round(S.x / LANE), S.y + STEP, true, !changing);
   const wasGrounded = S.grounded;
@@ -648,11 +866,13 @@ function update(dt) {
 
   for (const o of S.objs) {
     const hitZ = o.z < PZ + 0.5 && o.z + (o.d || 0.6) > PZ - 0.5;
-    if (o.t === "coin" || o.t === "power") {
+    if (o.t === "coin" || o.t === "power" || o.t === "key" || o.t === "letter") {
       if (S.magnet > 0 && o.t === "coin" && Math.abs(o.z - PZ) < 12) { o.lane += (S.x / LANE - o.lane) * 0.3; o.y += (S.y + 0.8 - o.y) * 0.3; }
       if (hitZ && Math.abs(o.lane * LANE - S.x) < 1.2 && Math.abs(o.y - (S.y + 0.8)) < 1.6) {
         o.dead = true;
         if (o.t === "coin") { S.coins += S.double > 0 ? 2 : 1; Sound.play("coin"); sparkle(o.lane * LANE, o.y, PZ, "#ffe66b", 5); }
+        else if (o.t === "key") { SAVE.keys++; store(); Sound.play("power"); note(`+1 ${CAPY}`, `você tem ${SAVE.keys} ${SAVE.keys === 1 ? "cabeça" : "cabeças"} de capivara`, "#ffd23f"); sparkle(o.lane * LANE, o.y, PZ, "#ffd23f", 14); }
+        else if (o.t === "letter") { gotLetter(); sparkle(o.lane * LANE, o.y, PZ, "#d6a8ff", 18); }
         else { applyEffect(o.kind); Sound.play("power"); sparkle(o.lane * LANE, o.y, PZ, "#7be0ff", 14); }
       }
       continue;
@@ -664,9 +884,11 @@ function update(dt) {
     const rolling = S.roll > 0 && S.y < 0.6 && o.t !== "low";
     if (!rolling && S.y < BAR_TOP[o.t] - STEP) { o.hit = true; crash(); }
   }
+  // letra que passou sem ser pega: volta a aparecer um pouco mais à frente
+  if (S.letterOut && !S.objs.some(o => o.t === "letter" && !o.dead && o.z + 1 > 0) && !S.queue.some(o => o.t === "letter")) { S.letterOut = false; S.letterCD = rnd(250, 400); }
   S.objs = S.objs.filter(o => !o.dead && o.z + (o.d || 1) > 0);
 
-  if (S.dist >= C.goalMeters) {
+  if (!infinite() && S.dist >= C.goalMeters) {
     S.dist = C.goalMeters; S.state = "win"; S.winT = 0;
     setWins(SESSION.wins + 1);
     BOT.wasOn = BOT.on; BOT.on = false;
@@ -902,6 +1124,21 @@ function drawObj(o) {
     g.fillStyle = "#fff1a8"; g.beginPath(); g.ellipse(cx, cy, w * 0.62, h * 0.62, 0, 0, 7); g.fill();
     g.fillStyle = C.colors.coin; g.beginPath(); g.ellipse(cx, cy, w * 0.45, h * 0.45, 0, 0, 7); g.fill();
     g.fillStyle = "rgba(255,255,255,.8)"; g.beginPath(); g.ellipse(cx - w * 0.35, cy - h * 0.4, w * 0.15, h * 0.12, -0.6, 0, 7); g.fill();
+  } else if (o.t === "key" || o.t === "letter") {
+    if (o.z < 0.5) return;
+    const [cx, cy, s] = proj(x, o.y + Math.sin(S.t * 3 + o.z) * 0.2, o.z), key = o.t === "key";
+    const col = key ? "255,210,63" : "214,168,255";
+    const gl = g.createRadialGradient(cx, cy, 0, cx, cy, s * 0.95);
+    gl.addColorStop(0, `rgba(${col},.85)`); gl.addColorStop(1, `rgba(${col},0)`);
+    g.fillStyle = gl; g.fillRect(cx - s, cy - s, s * 2, s * 2);
+    if (key) { // cabeça de capivara balançando
+      g.save(); g.translate(cx, cy); g.rotate(Math.sin(S.t * 4 + o.z) * 0.18); capyHead(0, 0, s * 0.68); g.restore();
+      return;
+    }
+    rrect(cx - s * 0.4, cy - s * 0.4, s * 0.8, s * 0.8, s * 0.16, key ? "#1a3a5c" : "#4b1f7a");
+    g.lineWidth = s * 0.06; g.strokeStyle = "#fff"; g.beginPath(); g.roundRect(cx - s * 0.4, cy - s * 0.4, s * 0.8, s * 0.8, s * 0.16); g.stroke();
+    g.fillStyle = "#fff"; g.font = `900 ${s * 0.5}px system-ui`; g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(o.ch, cx, cy + s * 0.03);
   } else if (o.t === "power") {
     if (o.z < 0.5) return;
     const [cx, cy, s] = proj(x, o.y + Math.sin(S.t * 3) * 0.2, o.z);
@@ -944,6 +1181,15 @@ function drawPlayer() {
     squash: (S.landT || 0) / 0.18,                                             // amassa ao aterrissar
     stumble: S.stumble > 0 ? S.stumble / 0.6 : 0                               // cambaleia depois de bater
   });
+  if (S.dizzy > 0) { // tonto: estrelinhas girando em volta da cabeça (piscam no último segundo)
+    if (S.dizzy < 1 && Math.floor(S.t * 10) % 2) return;
+    const hy = by - s * (S.roll > 0 ? 0.8 : 1.42);
+    for (let i = 0; i < 3; i++) {
+      const a = S.t * 5 + i * Math.PI * 2 / 3, sx = px + Math.cos(a) * s * 0.32, sy = hy + Math.sin(a) * s * 0.08;
+      g.font = `900 ${s * (Math.sin(a) > 0 ? 0.2 : 0.15)}px system-ui`; g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillStyle = "#ffd23f"; g.fillText("★", sx, sy);
+    }
+  }
 }
 
 // ---------- avatar com expressões (reage à live) ----------
@@ -1007,7 +1253,14 @@ function saveVolumes(key) {
 }
 // itens do menu principal: aberto no meio de uma partida, ganha "Continuar" (sem perder a distância) e "Nova partida"
 function mainItems() {
-  return S.resumable ? [["play", "▶  CONTINUAR"], ["new", "🔄  NOVA PARTIDA"], ...MENU_MAIN.slice(1)] : MENU_MAIN;
+  const mode = ["mode", infinite() ? "♾️  MODO: INFINITO" : "🏁  MODO: META"];
+  const rest = [mode, ...MENU_MAIN.slice(1)];
+  return S.resumable ? [["play", "▶  CONTINUAR"], ["new", "🔄  NOVA PARTIDA"], ...rest] : [MENU_MAIN[0], ...rest];
+}
+// trocar de modo no meio de uma partida começa uma nova (a distância de um modo não vale no outro)
+function toggleMode() {
+  saveFromGame({ mode: infinite() ? "meta" : "infinito" });
+  S.resumable = false; Sound.play("coin");
 }
 // abre o menu: pelo botão da pausa, pelo painel ou pela tecla de pausa já no menu de pausa
 function openMenu() {
@@ -1024,6 +1277,7 @@ function menuKey(a) {
       const id = (items[MENU.sel] || items[0])[0];
       if (id === "play") S.resumable ? resumeRun() : start();
       else if (id === "new") { S.resumable = false; start(); }
+      else if (id === "mode") toggleMode();
       else menuGo(id);
     }
     return;
@@ -1064,7 +1318,8 @@ function menuButton(x, y, w, h, label, selected, fn, sel, size = 34) {
   rrect(-w / 2, -h / 2, w, h, h / 2, selected ? "#ffd23f" : "rgba(20,14,36,.82)");
   g.lineWidth = 4; g.strokeStyle = selected ? "#fff6c8" : "rgba(255,255,255,.18)"; g.beginPath(); g.roundRect(-w / 2, -h / 2, w, h, h / 2); g.stroke();
   g.font = `900 ${size}px system-ui`; g.textAlign = "center"; g.textBaseline = "middle";
-  g.fillStyle = selected ? "#1d1600" : "#fff"; g.fillText(label, 0, 2);
+  if (label.includes(CAPY)) richText(label, 0, 2, size, selected ? "#1d1600" : "#fff", "center", false);
+  else { g.fillStyle = selected ? "#1d1600" : "#fff"; g.fillText(label, 0, 2); }
   g.restore();
 }
 function drawMenu() {
@@ -1075,7 +1330,8 @@ function drawMenu() {
   if (scr === "main") {
     text("CAPIVARA", W / 2, T + 70, 90, "#ffd23f");
     text("RUNNER", W / 2, T + 150, 90, "#ff4fa3");
-    text(`Meta: ${C.goalMeters.toLocaleString("pt-BR")} m · 🏆 ${SESSION.wins} ${SESSION.wins === 1 ? "vitória" : "vitórias"}`, W / 2, T + 215, 28, "#fff");
+    text(infinite() ? `Modo infinito · 🏆 recorde ${SAVE.best.toLocaleString("pt-BR")} · ${CAPY} ${SAVE.keys}`
+      : `Meta: ${C.goalMeters.toLocaleString("pt-BR")} m · 🏆 ${SESSION.wins} ${SESSION.wins === 1 ? "vitória" : "vitórias"}`, W / 2, T + 215, 28, "#fff");
     const items = mainItems(), gap = items.length > 5 ? 84 : 92;
     items.forEach(([id, label], i) => menuButton(W / 2 - 230, T + 260 + i * gap, 460, 72, label, MENU.sel === i, () => { MENU.sel = i; menuKey("ok"); }, i, id === "play" ? 38 : 30));
     const sk = Characters.byId(C.skin);
@@ -1257,13 +1513,16 @@ function drawTop(x, y) {
 }
 // faixa no rodapé: o que cada presente faz (montada das regras do painel)
 function legendItems() {
-  return (C.donationRules || []).map(r => {
-    const m = Number(r.meters) || 0, win = r.effect === "win";
-    const fx = r.effect && FX[r.effect] && !win ? " " + FX[r.effect].label.split(" ")[0] : "";
-    const what = win ? "VITÓRIA!" : `${m > 0 ? "−" : "+"}${Math.abs(m).toLocaleString("pt-BR")} m${fx}`;
+  const items = (C.donationRules || []).map(r => {
+    const m = Number(r.meters) || 0, win = r.effect === "win", zera = r.effect === "zera";
+    const fx = r.effect && FX[r.effect] && !win && !zera ? " " + FX[r.effect].label.split(" ")[0] : "";
+    const what = win ? "VITÓRIA!" : zera ? "ZERA" : `${m > 0 ? "−" : "+"}${Math.abs(m).toLocaleString("pt-BR")} m${fx}`;
     const name = r.gift ? ((r.minCount || 1) > 1 ? `${r.minCount}× ${r.gift}` : r.gift) : (r.minCoins > 1 ? `${r.minCoins}+🪙` : "qualquer presente");
     return { img: r.giftImg, name, what, help: win || m < 0 };
   });
+  // presentes fora da lista: ajudam como o presente da lista de valor mais próximo
+  if (C.giftFallback !== false && items.length) items.push({ img: "", name: "outros presentes", what: "ajudam como o de valor mais parecido", help: true });
+  return items;
 }
 const hudOn = k => !C.hud || C.hud[k] !== false;
 function drawLegend(y) {
@@ -1289,7 +1548,32 @@ function drawLegend(y) {
 }
 
 // ---------- HUD ----------
+// cabeça de capivara: o item de "continuar" (antes era a chave). É o mesmo rosto do avatar, sem o fone
+const CAPY = "\u{E000}", CAPY_SKIN = { ...Characters.SKINS[0], hat: "none" };
+function capyHead(cx, cy, r) {
+  g.save();
+  Characters.portrait(g, cx, cy - r * 0.18, r * 1.1, CAPY_SKIN, "happy", S.t);
+  g.restore();
+}
+// largura de um texto que pode ter cabeças de capivara no meio (cada uma ocupa ~1,4× o tamanho da letra)
+function richWidth(t, size) {
+  g.font = `900 ${size}px system-ui`;
+  return t.split(CAPY).reduce((w, part) => w + g.measureText(part).width, 0) + (t.split(CAPY).length - 1) * size * 1.4;
+}
+function richText(t, x, y, size, col, align, stroke) {
+  const parts = t.split(CAPY), tw = richWidth(t, size);
+  let cx = align === "left" ? x : align === "right" ? x - tw : x - tw / 2;
+  parts.forEach((part, i) => {
+    if (part) {
+      g.textAlign = "left"; g.textBaseline = "middle";
+      if (stroke) { g.lineWidth = size / 6; g.strokeStyle = "#000"; g.lineJoin = "round"; g.strokeText(part, cx, y); }
+      g.fillStyle = col; g.fillText(part, cx, y); cx += g.measureText(part).width;
+    }
+    if (i < parts.length - 1) { capyHead(cx + size * 0.7, y, size * 0.74); cx += size * 1.4; }
+  });
+}
 function text(t, x, y, size, col, align = "center") {
+  if (t.includes(CAPY)) { g.font = `900 ${size}px system-ui`; return richText(t, x, y, size, col, align, true); }
   g.font = `900 ${size}px system-ui`; g.textAlign = align; g.textBaseline = "middle";
   g.lineWidth = size / 6; g.strokeStyle = "#000"; g.lineJoin = "round"; g.strokeText(t, x, y); g.fillStyle = col; g.fillText(t, x, y);
 }
@@ -1297,65 +1581,126 @@ function text(t, x, y, size, col, align = "center") {
 // barra de presentes) ficam cobertos pela interface do app, então as informações começam em hudTop
 // e vão só até a altura do personagem.
 const hudTop = () => Math.max(0, Number(C.hudTop) || 0);
+let HUD_COL = 400; // onde começam as colunas laterais (depende do que está ligado no topo)
+// botão de pausa do canto (dá para clicar/tocar durante a run)
+const PAUSE_BTN = () => ({ x: 20, y: hudTop() + 10, w: 66, h: 66 });
+function inPauseButton(x, y) { const b = PAUSE_BTN(); return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h; }
+// power-ups e efeitos na lateral: ícone + barra de tempo (duração máxima de cada um, para a barra)
+const FX_HUD = [["boardTime", "🛹", 30, "#ffd23f"], ["shield", "🛡️", 10, "#7be0ff"], ["magnet", "🧲", 12, "#ff5a6e"], ["double", "2X", 12, "#3ee07a"],
+  ["speedFx", "⚡", 10, "#ff7b39"], ["slowFx", "🐢", 10, "#8dffb0"], ["reverseFx", "🔄", 10, "#ffb3c1"], ["darkFx", "🌑", 10, "#9b7bff"]];
+// etiqueta escura alinhada à direita; devolve a largura
+function pill(xRight, y, label, col) {
+  const w = richWidth(label, 30) + 36;
+  rrect(xRight - w, y, w, 46, 23, "rgba(10,8,18,.6)");
+  text(label, xRight - 18, y + 24, 30, col, "right");
+  return w;
+}
 function drawHUD() {
   if (S.state === "menu") return drawMenu(); // o menu ocupa a tela toda, sem o placar por trás
   const T = hudTop();
-  const left = Math.max(0, C.goalMeters - S.dist);
-  const p = S.dist / C.goalMeters, final = p >= 0.9 && S.state === "run";
-  text(`${Math.floor(S.dist).toLocaleString("pt-BR")} m`, W / 2, T + 46, 56, "#fff");
-  if (final) { // reta final: pulsa em vermelho para criar tensão (ajudar a ganhar × atrapalhar no fim)
-    const pulse = 1 + Math.sin(S.t * 8) * 0.06;
-    g.save(); g.translate(W / 2, T + 96); g.scale(pulse, pulse);
-    text(`🔥 RETA FINAL · faltam ${Math.ceil(left).toLocaleString("pt-BR")} m 🔥`, 0, 0, 28, "#ff6b6b");
-    g.restore();
-  } else text(`faltam ${Math.ceil(left).toLocaleString("pt-BR")} m`, W / 2, T + 96, 28, "#ffe08a");
-  const by = T + 120;
-  rrect(40, by, W - 80, 24, 12, "rgba(0,0,0,.5)");
-  if (p > 0) {
-    const bar = g.createLinearGradient(40, 0, W - 40, 0); bar.addColorStop(0, "#3ee07a"); bar.addColorStop(1, final ? "#ff4f6d" : "#ffd23f");
-    g.fillStyle = bar; g.beginPath(); g.roundRect(40, by, Math.max(24, (W - 80) * p), 24, 12); g.fill();
+  // 1) canto superior: pausa + barra com a palavra do dia (esquerda) e a pontuação (direita)
+  const pb = PAUSE_BTN();
+  rrect(pb.x, pb.y + 4, pb.w, pb.h, 16, "rgba(0,0,0,.35)");
+  rrect(pb.x, pb.y, pb.w, pb.h, 16, "#3f8fe0");
+  g.lineWidth = 4; g.strokeStyle = "#cfe6ff"; g.beginPath(); g.roundRect(pb.x, pb.y, pb.w, pb.h, 16); g.stroke();
+  rrect(pb.x + 20, pb.y + 17, 9, 32, 3, "#fff"); rrect(pb.x + 37, pb.y + 17, 9, 32, 3, "#fff");
+  if (Sound.muted) text("🔇", pb.x + pb.w / 2, pb.y + pb.h + 26, 26, "#fff");
+  const bx = pb.x + pb.w + 12, bw = W - 20 - bx;
+  rrect(bx, pb.y + 4, bw, 58, 29, "rgba(10,8,18,.6)");
+  const word = dayWord(), got = SAVE.word.n, done = got >= word.length, bs = word.length > 7 ? 24 : 27;
+  for (let i = 0; i < word.length; i++) { // palavra do dia: quadradinhos com as letras já pegas
+    const x = bx + 16 + i * (bs + 4), y = pb.y + 33 - bs / 2;
+    rrect(x, y, bs, bs, 6, i < got ? (done ? "#3ee07a" : "#9b5cff") : "rgba(255,255,255,.14)");
+    if (i < got) text(word[i], x + bs / 2, y + bs / 2 + 1, bs * 0.7, "#fff");
   }
-  for (let i = 1; i < 10; i++) { g.fillStyle = "rgba(255,255,255,.35)"; g.fillRect(40 + (W - 80) * i / 10 - 1, by + 4, 2, 16); } // marcas das metas
-  text("🏁", W - 40, by + 12, 30, "#fff");
-  if (hudOn("teams")) drawTeams(T + 156);
-  drawLegend(T + 220);
-  // coluna da esquerda: vitórias da sessão, moedas e o medidor da próxima regra de likes
-  let ly = T + 276;
-  if (hudOn("wins")) { text(`🏆 ${SESSION.wins} ${SESSION.wins === 1 ? "vitória" : "vitórias"}`, 30, ly, 28, "#ffd23f", "left"); ly += 34; }
-  if (hudOn("coins")) { text(`🪙 ${S.coins} moedas`, 30, ly, 22, "#ffe9a8", "left"); ly += 30; }
+  // pontuação = metros da run (aqui entra o multiplicador no futuro: veja PROXIMOS-PASSOS.md)
+  const score = String(Math.floor(S.dist)).padStart(6, "0");
+  text(score, bx + bw - 22, pb.y + 34, 44, "#fff", "right");
+  g.font = "900 44px system-ui"; const sw = g.measureText(score).width;
+  text("⭐", bx + bw - 30 - sw, pb.y + 33, 34, "#ffd23f", "right");
+  // 2) abaixo da pontuação: moedas e cabeças de capivara (e o recorde no modo infinito)
+  const py = pb.y + 72;
+  let pw = 0;
+  if (hudOn("coins")) pw = pill(W - 20, py, `${S.coins} 🪙`, "#ffe08a") + 10;
+  pill(W - 20 - pw, py, `${SAVE.keys} ${CAPY}`, "#ffd23f");
+  let y = py + 62;
+  if (infinite()) {
+    text(S.newBest ? "🏆 NOVO RECORDE" : `🏆 recorde ${SAVE.best.toLocaleString("pt-BR")}`, W - 24, y - 4, 22, S.newBest ? "#ffd23f" : "#e8e2ff", "right");
+    y += 26;
+  } else {
+    // 3) modo meta: quanto falta e a barra até a meta (com as marcas de 10 em 10%)
+    const left = Math.max(0, C.goalMeters - S.dist), p = S.dist / C.goalMeters, final = p >= 0.9 && S.state === "run";
+    if (final) { // reta final: pulsa em vermelho para criar tensão (ajudar a ganhar × atrapalhar no fim)
+      const pulse = 1 + Math.sin(S.t * 8) * 0.06;
+      g.save(); g.translate(W / 2, y + 12); g.scale(pulse, pulse);
+      text(`🔥 RETA FINAL · faltam ${Math.ceil(left).toLocaleString("pt-BR")} m 🔥`, 0, 0, 28, "#ff6b6b");
+      g.restore();
+    } else text(`faltam ${Math.ceil(left).toLocaleString("pt-BR")} m até a meta`, W / 2, y + 12, 28, "#ffe08a");
+    const by = y + 34;
+    rrect(40, by, W - 80, 20, 10, "rgba(0,0,0,.5)");
+    if (p > 0) {
+      const bar = g.createLinearGradient(40, 0, W - 40, 0); bar.addColorStop(0, "#3ee07a"); bar.addColorStop(1, final ? "#ff4f6d" : "#ffd23f");
+      g.fillStyle = bar; g.beginPath(); g.roundRect(40, by, Math.max(20, (W - 80) * p), 20, 10); g.fill();
+    }
+    for (let i = 1; i < 10; i++) { g.fillStyle = "rgba(255,255,255,.35)"; g.fillRect(40 + (W - 80) * i / 10 - 1, by + 4, 2, 12); }
+    text("🏁", W - 40, by + 10, 28, "#fff");
+    y = by + 40;
+  }
+  // 4) itens da live: Ajuda × Atrapalha e a faixa "o que cada presente faz" (só no modo meta;
+  //    o modo infinito mostra só o jogo: pontuação, moedas, cabeças, recorde, palavra e power-ups)
+  const live = !infinite();
+  if (live && hudOn("teams")) { drawTeams(y); y += 46; }
+  if (live && C.showLegend !== false && hudOn("legend") && legendItems().length) { drawLegend(y + 24); y += 62; }
+  HUD_COL = y + 12;
+  // 5) coluna da esquerda: avatar, vitórias, medidor de likes e últimas doações
+  let ly = HUD_COL;
+  if (live && hudOn("avatar")) { drawAvatar(72, ly + 48, 46); ly += 112; }
+  if (live && hudOn("wins")) { text(`🏆 ${SESSION.wins} ${SESSION.wins === 1 ? "vitória" : "vitórias"}`, 26, ly + 10, 26, "#ffd23f", "left"); ly += 38; }
   const lr = likeRules()[0];
-  if (lr && hudOn("likes")) {
+  if (live && lr && hudOn("likes")) {
     const i = likeRules().indexOf(lr), cnt = S.likeCounts[i] || 0, lp = Math.min(1, cnt / lr.every);
     const m = Number(lr.meters) || 0, what = lr.effect === "win" ? "vitória" : `${m > 0 ? "−" : "+"}${Math.abs(m).toLocaleString("pt-BR")} m`;
-    text(`❤️ ${cnt}/${lr.every} likes = ${what}`, 30, ly, 18, "#ffd0e4", "left");
-    rrect(30, ly + 12, 200, 12, 6, "rgba(0,0,0,.5)");
-    if (lp > 0) rrect(30, ly + 12, Math.max(12, 200 * lp), 12, 6, "#ff6fae");
+    text(`❤️ ${cnt}/${lr.every} = ${what}`, 26, ly + 8, 18, "#ffd0e4", "left");
+    rrect(26, ly + 20, 180, 12, 6, "rgba(0,0,0,.5)");
+    if (lp > 0) rrect(26, ly + 20, Math.max(12, 180 * lp), 12, 6, "#ff6fae");
+    ly += 48;
   }
-  if (hudOn("avatar")) drawAvatar(W - 72, T + 300, 46);
-  if (Sound.muted) text("🔇", W - 130, T + 280, 26, "#fff", "right");
-  const fx = [];
-  if (S.boardTime > 0) fx.push(`🛹 ${S.boardTime | 0}s`);
-  if (S.shield > 0) fx.push(`🛡️ ${S.shield | 0}s`);
-  if (S.magnet > 0) fx.push(`🧲 ${S.magnet | 0}s`);
-  if (S.double > 0) fx.push(`2X ${S.double | 0}s`);
-  if (S.speedFx > 0) fx.push(`⚡ ${S.speedFx | 0}s`);
-  if (S.slowFx > 0) fx.push(`🐢 ${S.slowFx | 0}s`);
-  if (S.reverseFx > 0) fx.push(`🔄 INVERTIDO ${S.reverseFx | 0}s`);
-  if (S.darkFx > 0) fx.push(`🌑 ${S.darkFx | 0}s`);
-  fx.forEach((f, i) => text(f, W - 30, T + 372 + i * 34, 24, "#7be0ff", "right"));
-  // doações recentes (esquerda) e ranking (direita), acima da altura do personagem
-  if (hudOn("feed")) S.feed.forEach((f, i) => {
+  if (live && hudOn("feed")) S.feed.forEach((f, i) => {
     g.globalAlpha = Math.max(0.35, 1 - f.t / 20);
-    text(f.text.length > 21 ? f.text.slice(0, 20) + "…" : f.text, 30, T + 380 + i * 30, 21, f.help ? "#8dffb0" : "#ffb3c1", "left");
+    text(f.text.length > 18 ? f.text.slice(0, 17) + "…" : f.text, 26, ly + 10 + i * 28, 19, f.help ? "#8dffb0" : "#ffb3c1", "left");
     g.globalAlpha = 1;
   });
-  if (hudOn("top")) drawTop(W - 30, T + 380 + Math.max(0, Math.min(fx.length, 3)) * 34);
+  // 6) coluna da direita: power-ups ativos com a barra de tempo diminuindo, e o top da partida
+  let ry = HUD_COL;
+  for (const [k, icon, max, col] of FX_HUD) {
+    if (!(S[k] > 0)) continue;
+    const x = W - 20 - 76;
+    rrect(x, ry, 76, 76, 18, "rgba(10,8,18,.62)");
+    g.lineWidth = 3; g.strokeStyle = col; g.beginPath(); g.roundRect(x, ry, 76, 76, 18); g.stroke();
+    text(icon, x + 38, ry + 34, icon === "2X" ? 30 : 38, "#fff");
+    rrect(x + 10, ry + 60, 56, 8, 4, "rgba(255,255,255,.2)");
+    rrect(x + 10, ry + 60, Math.max(8, 56 * Math.min(1, S[k] / max)), 8, 4, col);
+    ry += 86;
+  }
+  if (S.reverseFx > 0) text("CONTROLES INVERTIDOS", W / 2, HUD_COL + 14, 24, "#ffb3c1");
+  if (live && hudOn("top")) drawTop(W - 24, ry + 14);
+  // 7) centro livre: só avisos rápidos (recorde, letra, cabeça, continuar…)
+  S.notes.forEach((n, i) => {
+    g.globalAlpha = Math.min(1, n.t * 3);
+    const yy = HUD_COL + 120 + i * 96, k = 1 + Math.max(0, n.t - 2.1) * 0.6; // "estoura" ao aparecer
+    g.save(); g.translate(W / 2, yy); g.scale(k, k);
+    const tw = Math.max(richWidth(n.a, 44), n.b ? 300 : 0);
+    rrect(-tw / 2 - 30, -38, tw + 60, n.b ? 88 : 66, 24, "rgba(10,8,18,.55)");
+    text(n.a, 0, -6, 44, n.col);
+    if (n.b) text(n.b, 0, 34, 22, "#fff");
+    g.restore(); g.globalAlpha = 1;
+  });
   if (S.banner > 0 && S.theme) { // placa de "chegou em outro país"
     g.globalAlpha = Math.min(1, S.banner, (4 - S.banner) * 3);
     g.font = "900 26px system-ui"; const tw = g.measureText(S.theme.name).width, x0 = W / 2 - (tw + 56) / 2;
-    rrect(x0 - 12, T + 268, tw + 80, 44, 22, "rgba(0,0,0,.45)");
-    SC.flag(g, x0, T + 276, 42, 28, S.theme.flag);
-    text(S.theme.name, x0 + 52, T + 290, 26, "#fff", "left");
+    rrect(x0 - 12, HUD_COL + 40, tw + 80, 44, 22, "rgba(0,0,0,.45)");
+    SC.flag(g, x0, HUD_COL + 48, 42, 28, S.theme.flag);
+    text(S.theme.name, x0 + 52, HUD_COL + 62, 26, "#fff", "left");
     g.globalAlpha = 1;
   }
   if (S.state === "run") drawAlert();
@@ -1399,7 +1744,34 @@ function drawHUD() {
     if (hudOn("wins")) text(`🏆 ${SESSION.wins}ª vitória da sessão`, W / 2, H * 0.3, 30, "#fff");
     if (C.autoRestartSec > 0) text(`nova partida em ${Math.max(0, Math.ceil(C.autoRestartSec - S.winT))}s`, W / 2, H * 0.82, 26, "#d9d3ee");
   }
+  if (S.state === "over") drawOver();
   drawConfetti();
+}
+// tela de fim de run (modo infinito): pontuação, moedas, recorde, continuar com cabeças de capivara e jogar de novo
+function drawOver() {
+  MENU.hits = [];
+  const T = hudTop(), k = Math.min(1, S.overT * 4);
+  g.fillStyle = `rgba(20,10,40,${0.68 * k})`; g.fillRect(0, 0, W, H);
+  g.save(); g.globalAlpha = k;
+  text("BATEU! 💥", W / 2, T + 140, 78, "#ff7b39");
+  rrect(W / 2 - 270, T + 200, 540, 320, 32, "rgba(20,14,36,.88)");
+  g.lineWidth = 3; g.strokeStyle = "rgba(255,255,255,.15)"; g.beginPath(); g.roundRect(W / 2 - 270, T + 200, 540, 320, 32); g.stroke();
+  text("PONTUAÇÃO", W / 2, T + 244, 26, "#cfc8e8");
+  text(`⭐ ${Math.floor(S.dist).toLocaleString("pt-BR")}`, W / 2, T + 304, 68, "#fff");
+  if (S.newBest) { const b = 1 + Math.sin(S.t * 6) * 0.05; g.save(); g.translate(W / 2, T + 368); g.scale(b, b); text("🏆 NOVO RECORDE!", 0, 0, 34, "#ffd23f"); g.restore(); }
+  else text(`🏆 recorde ${SAVE.best.toLocaleString("pt-BR")}`, W / 2, T + 368, 28, "#cfc8e8");
+  text(`🪙 ${S.coins} moedas   ·   ${CAPY} ${SAVE.keys} ${SAVE.keys === 1 ? "cabeça" : "cabeças"}`, W / 2, T + 426, 28, "#ffe08a");
+  const w = dayWord();
+  text(wordDone() ? `🔤 palavra do dia: ${w} ✔` : `🔤 palavra do dia: ${SAVE.word.n}/${w.length} letras`, W / 2, T + 476, 24, "#d6a8ff");
+  const cost = continueCost(), can = SAVE.keys >= cost;
+  g.globalAlpha = k * (can ? 1 : 0.45);
+  menuButton(W / 2 - 240, T + 560, 480, 86, `CONTINUAR  (${cost} ${CAPY})`, MENU.sel === 0, continueRun, 0, 32);
+  g.globalAlpha = k;
+  if (!can) text(`faltam ${cost - SAVE.keys} ${CAPY} · pegue na pista e na palavra do dia`, W / 2, T + 668, 21, "#cfc8e8");
+  menuButton(W / 2 - 240, T + 700, 480, 86, "🔄  JOGAR DE NOVO", MENU.sel === 1, () => start(), 1, 34);
+  menuButton(W / 2 - 240, T + 806, 480, 76, "🏠  MENU", MENU.sel === 2, () => openMenu(), 2, 30);
+  if (C.autoRestartSec > 0) text(`nova run em ${Math.max(0, Math.ceil(C.autoRestartSec - S.overT))}s`, W / 2, T + 920, 24, "#d9d3ee");
+  g.restore();
 }
 function render() {
   const amp = (S.stumble > 0.3 ? 7 : 0) + (S.shakeT > 0 ? S.shakeA * Math.min(1, S.shakeT * 3) : 0);
