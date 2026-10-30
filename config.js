@@ -6,7 +6,7 @@ window.CONFIG = {
   goalMeters: 100000,          // meta da live
   startSpeed: 22,              // metros por segundo
   maxSpeed: 45,
-  speedGainPerSec: 0.08,
+  speedGainPerSec: 0.128,      // chega na velocidade máxima em ~3 min (179 s, como no Subway)
   crashPenaltyMeters: 200,     // quanto volta ao bater (0 = sem penalidade)
   likesPerPushback: 500,       // a cada N likes, volta likePushbackMeters
   likePushbackMeters: 10,

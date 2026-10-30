@@ -10,7 +10,14 @@ if (!CanvasRenderingContext2D.prototype.roundRect) CanvasRenderingContext2D.prot
 };
 const cv = document.getElementById("c"), g = cv.getContext("2d");
 const W = cv.width, H = cv.height;
-const LANE = 2.4, CAM_H = 5.4, F = W * 0.85, HORIZON = H * 0.27, PZ = 7.5, FAR = 120, WALL = LANE * 1.75;
+const LANE = 2.4, CAM_H = 5.4, F0 = W * 0.85, HORIZON = H * 0.27, PZ = 7.5, FAR = 120, WALL = LANE * 1.75;
+// tempos das ações, na mesma proporção do Subway Surfers em relação ao pulo (lá: pulo 0,89 s, troca de pista 0,27 s,
+// rolada 0,6 s, mergulho no ar = velocidade do pulo). Aqui o pulo dura ~0,68 s, então tudo escala junto
+const LANE_TIME = 0.205, ROLL_TIME = 0.46, DIVE_VY = -13, LANE_SPEED = LANE / LANE_TIME;
+// câmera: o campo de visão abre com a velocidade (FOV 68° parado → +9° na velocidade máxima, +6° a mais
+// acelerado por presente), suavizado como no Subway (2,0/s)
+const FOV_BASE = 68, FOV_RUN = 9, FOV_BOOST = 6, FOV_SMOOTH = 2;
+let F = F0, FOV = FOV_BASE;
 const TRAIN_H = 3.4, RAMP = 7;
 const BARRIERS = ["low", "mid", "high"]; // low: só pulando · mid: pula por cima ou rola por baixo · high: só rolando por baixo
 // altura do topo de cada barreira: dá para pisar em cima (como um degrau), e a zona em z onde ela é sólida
@@ -33,7 +40,8 @@ function reset() {
     look: 0, lookDir: 1, lookT: 0, nextLook: 4, mood: "", moodT: 0, alerts: [],
     team: { help: 0, hurt: 0 }, donors: {}, combo: 0, comboT: 0, flash: 0, flashCol: "#fff", shakeT: 0, shakeA: 0,
     confetti: [], milestone: 0, winner: "", winT: 0, legendX: 0, likeCounts: {}, landT: 0,
-    notes: [], overT: 0, continues: 0, newBest: false, letterCD: 250 + Math.random() * 200, letterOut: false
+    notes: [], overT: 0, continues: 0, newBest: false, letterCD: 250 + Math.random() * 200, letterOut: false,
+    chase: { z: PZ - 3.3, x: 0, t: 2.5, caught: 0 } // jacaré perseguidor: começa colado e fica para trás
   };
 }
 // vitórias da sessão (sobrevivem ao reinício da partida; editáveis/zeráveis pelo painel)
@@ -154,10 +162,19 @@ function addTrain(lane, z, opts = {}) {
   const d = opts.d || rnd(14, 28);
   if (opts.ramp) { S.objs.push({ t: "ramp", lane, z, d: RAMP }); z += RAMP; }
   S.objs.push({ t: "train", lane, z, d, col: opts.col || pick(C.colors.train), num: opts.num || 100 + (Math.random() * 900 | 0), move: opts.move || 0 });
-  if (opts.ramp) coinLine(lane, z + 2, Math.floor(d / 3), false, TRAIN_H);
+  if (opts.ramp) coinRun(lane, z + 2, z + d - 1.5, TRAIN_H);
 }
+// moedas: distância entre uma e outra na fileira (metros) e tamanho (1 = o tamanho antigo). Pode mexer à vontade
+const COIN_GAP = 3.3, COIN_SIZE = 1.35;
+// área em que o personagem pega a moeda: pequena, como no Subway, para dar para passar no vão entre duas moedas
+// (z: para a frente/trás, x: para os lados, y: para cima/baixo, em metros a partir do centro da moeda)
+const COIN_HIT = { z: 0.45, x: 0.9, y: 1.4 };
 function coinLine(lane, z, n, arc, base = 0, out = S.objs) {
-  for (let i = 0; i < n; i++) out.push({ t: "coin", lane, z: z + i * 2.2, y: base + (arc ? 1 + Math.sin(i / (n - 1) * Math.PI) * 2 : 0.8) });
+  for (let i = 0; i < n; i++) out.push({ t: "coin", lane, z: z + i * COIN_GAP, y: base + (arc ? 1 + Math.sin(i / (n - 1) * Math.PI) * 2 : 0.8) });
+}
+// fileira contínua de z0 até z1, sempre com o mesmo espaçamento (a primeira moeda fica em z0)
+function coinRun(lane, z0, z1, base, out) {
+  coinLine(lane, z0, Math.max(1, Math.floor((z1 - z0) / COIN_GAP + 1e-6) + 1), false, base, out);
 }
 
 // ---------- blocos pré-desenhados (chunks.js) ----------
@@ -166,7 +183,7 @@ const CHUNKS = window.CHUNKS || [], CHUNK_STEP = 3.5; // metros por linha
 const BAR_CHAR = { L: "low", B: "mid", H: "high" };
 // rows: as linhas já na ordem de perto para longe (linha 0 = a mais perto)
 function buildChunk(rows, z0, k) {
-  const out = [];
+  const out = [], forms = []; // forms: formações de moedas, montadas depois dos obstáculos
   const zr = i => z0 + i * CHUNK_STEP * k;
   for (let li = 0; li < 3; li++) {
     const lane = li - 1, col = rows.map(r => r[li] || ".");
@@ -181,40 +198,101 @@ function buildChunk(rows, z0, k) {
         const zt = ramp ? zr(i) + RAMP : zr(j), d = zr(e) - zt;
         if (ramp) out.push({ t: "ramp", lane, z: zr(i), d: RAMP });
         out.push({ t: "train", lane, z: zt, d, col: pick(C.colors.train), num: 100 + (Math.random() * 900 | 0), move: moving ? rnd(6, 12) : 0 });
-        if (ramp) coinLine(lane, zt + 2, Math.floor(d / 3), false, TRAIN_H, out);
-        for (let q = j; q < e; q++) if (col[q] === "t") coinLine(lane, zr(q), 2, false, TRAIN_H, out);
+        // moedas no teto: com rampa, a fileira começa subindo a rampa; sem rampa, onde estiver marcado "t"
+        if (ramp) forms.push({ kind: "roof", lane, z: zr(i) + RAMP * 0.35, end: zt + d - 1.5, ramp: zr(i) });
+        else for (let q = j; q < e; q++) if (col[q] === "t") {
+          let q2 = q; while (q2 < e && col[q2] === "t") q2++;
+          forms.push({ kind: "roof", lane, z: Math.max(zt + 1.5, zr(q)), end: zt + d - 1.5 }); q = q2 - 1;
+        }
         i = e - 1;
       } else if (BAR_CHAR[c.toUpperCase()]) {
         out.push({ t: BAR_CHAR[c.toUpperCase()], lane, z: zr(i) });
-        if (c === "l" || c === "b") coinLine(lane, zr(i) - 4.4, 5, true, 0, out);
-        if (c === "h") coinLine(lane, zr(i) - 2.2, 3, false, 0, out);
+        if (c === "l" || c === "b") forms.push({ kind: "arc", lane, z: zr(i), bar: zr(i) }); // arco por cima (o meio do arco fica na barreira)
+        if (c === "h") forms.push({ kind: "under", lane, z: zr(i) - 2 * COIN_GAP, bar: zr(i) });            // fileira por baixo
       } else if (c === "p" && Math.random() < 0.5) {
         out.push({ t: "power", kind: pick(["board", "magnet", "double"]), lane, z: zr(i), y: 1 });
-      } else if (c === "c" || c === "p") coinLine(lane, zr(i), 2, false, 0, out);
+      } else if (c === "c" || c === "p") {
+        // moedas no chão: um trecho de "c" seguidos vira uma fileira de 5 (trecho comprido: mais fileiras de 5)
+        let i2 = i + 1; while (i2 < col.length && col[i2] === "c") i2++;
+        const len = zr(i2) - zr(i), n = Math.max(1, Math.round(len / (COIN_ROW * COIN_GAP + 2 * COIN_GAP)));
+        for (let q = 0; q < n; q++) forms.push({ kind: "line", lane, z: zr(i) + q * (COIN_ROW + 1) * COIN_GAP });
+        i = i2 - 1;
+      }
     }
   }
+  placeCoins(forms, out);
   return out;
+}
+// ---------- moedas: sempre em formação (fileira de 5, arco de 5, fileiras de 5 no teto), nunca soltas ----------
+const COIN_ROW = 5, COIN_ARC = 7; // fileira de 5 no chão/teto; arco de 7 sobre a barreira (como o CoinCurveSpawner_7)
+function placeCoins(forms, out) {
+  const solids = out.filter(o => o.t === "train" || o.t === "ramp" || BARRIERS.includes(o.t));
+  const span = o => [o.z - 1.2, o.z + (o.d || 0.4) + 1.2];
+  const blocked = (lane, z, y, own) => solids.some(o => {
+    if (o.lane !== lane || (own !== undefined && BARRIERS.includes(o.t) && o.z === own)) return false;
+    const [a, b] = span(o);
+    if (z < a || z > b) return false;
+    if (o.t === "ramp") return y < 0.5;                 // fileira do chão encostando na rampa
+    if (o.t === "train") return y < TRAIN_H;            // moeda do chão dentro do trem
+    return y < BAR_TOP[o.t] + 0.4 && !(o.t === "high" && y < 1); // dentro da barreira (por baixo do painel pode)
+  });
+  // entre uma formação e outra fica sempre um vão (para não parecer uma fileira só de 10)
+  const kept = [], tooClose = (lane, z) => kept.some(c => c.lane === lane && Math.abs(c.z - z) < COIN_GAP * 1.9);
+  const rampY = (f, z) => f.ramp !== undefined && z < f.ramp + RAMP ? TRAIN_H * Math.max(0, (z - f.ramp) / RAMP) : TRAIN_H;
+  // prioridade: arco e fileira da barreira (fazem parte do obstáculo), depois teto, depois chão
+  const order = { arc: 0, under: 0, roof: 1, line: 2 };
+  forms.sort((a, b) => order[a.kind] - order[b.kind] || a.z - b.z);
+  for (const f of forms) {
+    const make = z0 => {
+      const coins = [];
+      if (f.kind === "roof") {
+        // teto comprido: fileiras de 5 com um vão entre elas; teto curto demais para 5: sem moedas
+        for (let z = z0; z + (COIN_ROW - 1) * COIN_GAP <= f.end + 0.01; z += (COIN_ROW + 1) * COIN_GAP)
+          for (let q = 0; q < COIN_ROW; q++) { const zz = z + q * COIN_GAP; coins.push({ z: zz, y: rampY(f, zz) + 0.8 }); }
+      } else if (f.kind === "arc") {
+        // arco = a curva do próprio pulo (como o JumpCurve do Subway), com o topo em cima da barreira e o
+        // comprimento acompanhando a velocidade: pulando na hora certa, o personagem passa por todas as moedas
+        const T = 26 / 38, v = Math.max(C.startSpeed, S.speed);
+        for (let q = 0; q < COIN_ARC; q++) {
+          const t = T * q / (COIN_ARC - 1);
+          coins.push({ z: z0 + v * (t - T / 2), y: 0.8 + Math.max(0, 13 * t - 19 * t * t) });
+        }
+      } else for (let q = 0; q < COIN_ROW; q++) coins.push({ z: z0 + q * COIN_GAP, y: 0.8 });
+      return coins;
+    };
+    const ok = cs => cs.length && cs.every(c => !blocked(f.lane, c.z, c.y, f.bar) && !tooClose(f.lane, c.z));
+    let coins = make(f.z);
+    // fileira do chão batendo num obstáculo: recua para terminar antes dele (se não couber, a formação sai inteira)
+    if (f.kind === "line" && !ok(coins)) {
+      const hit = coins.find(c => blocked(f.lane, c.z, c.y));
+      if (hit) coins = make(Math.min(...solids.filter(o => o.lane === f.lane && span(o)[1] >= hit.z && span(o)[0] <= hit.z).map(o => span(o)[0])) - 0.3 - (COIN_ROW - 1) * COIN_GAP);
+    }
+    if (!ok(coins)) continue;
+    for (const c of coins) { const coin = { t: "coin", lane: f.lane, z: c.z, y: c.y }; out.push(coin); kept.push(coin); }
+  }
 }
 // ---------- variedade: o mesmo bloco nunca vem igual ----------
 // tem caminho? Vindo de qualquer pista, sempre dá para passar, no ritmo de um jogador de verdade: uma troca de
 // pista leva quase duas linhas (então entre uma troca e outra passam pelo menos duas linhas inteiras) e a pista nova
 // não pode ter vagão do lado durante a troca. Subir num vagão só pela rampa; do teto, dá para andar de teto em teto
-function chunkPassable(rows) {
+// roofs = false: sem subir em vagão (só trocando de pista pelo chão)
+function chunkPassable(rows, cool = 2, roofs = true) {
   rows = ["...", "...", "...", "...", ...rows]; // o respiro antes do bloco (no mínimo 4 linhas livres)
   const n = rows.length, kind = (i, l) => i < 0 || i >= n ? "" : "TtM".includes(rows[i][l]) ? "T" : rows[i][l] === "R" ? "R" : "";
   for (let start = 0; start < 3; start++) {
-    let st = new Set([start * 8]); // estado = pista * 8 + teto * 4 + linhas que faltam para poder trocar de novo (0 a 2)
+    let st = new Set([start * 16]); // estado = pista * 16 + teto * 8 + linhas que faltam para poder trocar de novo (0 a 7)
     for (let i = 0; i < n && st.size; i++) {
       const nx = new Set();
       for (const s0 of st) {
-        const l = s0 >> 3, roof = (s0 >> 2) & 1, busy = s0 & 3;
+        const l = s0 >> 4, roof = (s0 >> 3) & 1, busy = s0 & 7;
         for (const nl of [l - 1, l, l + 1]) {
           if (nl < 0 || nl > 2) continue;
           const change = nl !== l;
           if (change && (busy || (!roof && (kind(i - 1, nl) === "T" || kind(i, nl) === "T" && kind(i, l) !== "T")))) continue;
-          const wait = change ? 2 : Math.max(0, busy - 1);
-          if (kind(i, nl) === "T") { if (roof || (!change && kind(i - 1, l) === "R")) nx.add(nl * 8 + 4 + wait); }
-          else nx.add(nl * 8 + wait);
+          const wait = change ? cool : Math.max(0, busy - 1);
+          if (kind(i, nl) === "T") { if (roofs && (roof || (!change && kind(i - 1, l) === "R"))) nx.add(nl * 16 + 8 + wait); }
+          else if (!roofs && kind(i, nl) === "R") continue; // rampa conta como parede quando não vale subir
+          else nx.add(nl * 16 + wait);
         }
       }
       st = nx;
@@ -240,12 +318,35 @@ function varyChunk(ch) {
       let c = r[src] || ".";
       if (BAR_SWAP[c] && Math.random() < 0.4) c = pick(BAR_SWAP[c]);
       else if (c === "c" && Math.random() < 0.25) c = ".";                                 // tira umas moedas…
-      else if (c === "." && !moving[li] && Math.random() < 0.05) c = "c";                  // …e põe outras
+      else if (c === "." && !moving[li] && Math.random() < 0.02) c = "c";                  // …e põe outras
       return c;
     }).join(""));
-    if (chunkPassable(rows)) return rows;
+    if (chunkPassable(rows)) return tight ? rows : addTrains(rows);
   }
   return base;
+}
+// mais trens, como no Subway: põe vagões parados (às vezes com rampa) nas pistas que estiverem vazias.
+// Cada vagão novo só fica se o bloco continuar com caminho PELO CHÃO (subir é opcional), com folga extra: três
+// linhas inteiras (quatro) entre uma troca de pista e outra. Só entra em bloco "aberto" (sem parede de vagões nem trem vindo)
+function addTrains(rows, tries = pick([4, 5, 5, 6])) {
+  rows = rows.slice();
+  if (!chunkPassable(rows, 3, false)) return rows; // bloco que já exige subir em vagão: não mexe
+  const moving = [0, 1, 2].map(li => rows.some(r => r[li] === "M"));
+  for (let n = 0; n < tries; n++) {
+    const li = Math.floor(Math.random() * 3), L = 4 + Math.floor(Math.random() * 9), ramp = Math.random() < 0.55;
+    const s0 = Math.floor(Math.random() * Math.max(1, rows.length - L));
+    if (moving[li] || s0 + L > rows.length) continue;
+    let free = true; // a pista precisa estar vazia (ou só com moedas) no trecho e uma linha antes/depois
+    for (let i = Math.max(0, s0 - 1); i <= Math.min(rows.length - 1, s0 + L); i++) if (!".c".includes(rows[i][li])) free = false;
+    if (!free) continue;
+    const next = rows.map((r, i) => {
+      if (i < s0 || i >= s0 + L) return r;
+      const c = ramp && i < s0 + 2 ? "R" : !ramp && i === s0 + 1 && Math.random() < 0.4 ? "t" : "T";
+      return r.slice(0, li) + c + r.slice(li + 1);
+    });
+    if (chunkPassable(next, 3, false)) rows = next; // tem que continuar dando para passar pelo chão
+  }
+  return rows;
 }
 // trecho curto montado na hora entre os blocos: uma ou duas barreiras soltas e moedas (sempre tem caminho)
 function fillerRows() {
@@ -267,10 +368,12 @@ function spawnChunk() {
   const all = CHUNKS.filter(c => c.tier <= maxTier);
   if (!all.length) { S.nextSpawn = 30; return; }
   let rows, name;
-  if (recent.length && Math.random() < 0.2) { rows = fillerRows(); name = "trecho sorteado"; }
+  if (recent.length && Math.random() < 0.2) { rows = addTrains(fillerRows()); name = "trecho sorteado"; }
   else {
     const keep = Math.min(5, all.length - 1); // quantos blocos recentes ficam de fora
-    const pool = all.filter(c => !recent.slice(-keep).includes(c.name));
+    const skip = keep > 0 ? recent.slice(-keep) : [];
+    let pool = all.filter(c => !skip.includes(c.name));
+    if (!pool.length) pool = all;
     const weight = c => c.tier === maxTier ? 2 : 1; // blocos do nível atual aparecem mais
     let r = Math.random() * pool.reduce((a, c) => a + weight(c), 0), ch = pool[0];
     for (const c of pool) { r -= weight(c); if (r <= 0) { ch = c; break; } }
@@ -424,7 +527,7 @@ function applyEffect(e) {
   if (e === "dark") S.darkFx = 10;
   if (e === "board") S.boardTime = 30;
   if (e === "shield") S.shield = 10;
-  if (e === "magnet" || e === "double") S[e] = 12;
+  if (e === "magnet" || e === "double") S[e] = 10; // 10 s, como o nível inicial do Subway
 }
 // regras de likes: "a cada N likes → avança/volta X m (+ efeito e som)"; cada regra conta separado
 function likeRules() {
@@ -510,7 +613,7 @@ function act(a, fromBot) {
   // um pulo por vez que o pé encosta em algo: vale no chão e também no ar (ex.: caindo de um vagão
   // sem ter pulado); quem já pulou só ganha outro quando pisar de novo (chão, trem ou barreira)
   if (a === "up" && (S.grounded || S.jumps > 0)) { S.vy = 13; S.roll = 0; S.grounded = false; S.jumps = 0; Sound.play("jump"); }
-  if (a === "down") { S.roll = 0.7; if (!S.grounded) S.vy = -25; Sound.play("roll"); }
+  if (a === "down") { S.roll = ROLL_TIME; if (!S.grounded) S.vy = Math.min(S.vy, DIVE_VY); Sound.play("roll"); }
 }
 // teclas configuráveis no painel (C.binds: ação → lista de e.code)
 addEventListener("keydown", e => {
@@ -622,10 +725,12 @@ function solidH(o, t) {
   return o.t === "train" ? TRAIN_H : TRAIN_H * (PZ - z) / o.d;
 }
 const BOT_SIDE = 0.24; // a troca de pista leva ~0,2 s: nesse tempo a pista nova não pode ter parede do lado
+// o corpo só passa para a pista nova no meio da troca (tMid): a partir dali ela não pode ter parede
 function sideClear(lane) {
+  const tMid = Math.max(0, (Math.abs(lane * LANE - S.x) - LANE / 2) / LANE_SPEED), t0 = Math.max(0, tMid - 0.03);
   for (const o of S.objs) {
     if (o.lane !== lane || o.passed || (o.t !== "train" && o.t !== "ramp")) continue;
-    for (let t = 0; t <= BOT_SIDE; t += 0.02) if (solidH(o, t) - Math.min(S.y, yAt(t)) > STEP) return false;
+    for (let t = t0; t <= BOT_SIDE; t += 0.02) if (solidH(o, t) - Math.min(S.y, yAt(t)) > STEP) return false;
   }
   return true;
 }
@@ -660,7 +765,69 @@ function laneSafeToEnter(lane, need = 0.5) {
   const b = barriersIn(lane)[0];
   return !(b && (b.z - PZ) / runSpeed() < 0.4); // barreira perto demais para dar tempo de reagir
 }
+// ---------- planejamento do bot: procura um caminho possível nos próximos 2,5 s ----------
+// Simula, em passos de 0,05 s, o que acontece em cada pista: altura do chão (trem/rampa chegando, também os que
+// vêm na direção dele), pulo/queda e troca de pista (0,25 s, sem subir em nada no meio). Uma ação só vale se
+// depois dela existir algum jeito de chegar vivo ao fim dos 2,5 s. É o mesmo raciocínio do verificador de blocos
+const PLAN_DT = 0.05, PLAN_K = 50, PLAN_CHANGE = 5;
+function planTables() {
+  const surf = [0, 1, 2].map(() => new Float32Array(PLAN_K + 2)), climb = [0, 1, 2].map(() => new Uint8Array(PLAN_K + 2));
+  for (const o of S.objs) {
+    if (o.passed || (o.t !== "train" && o.t !== "ramp")) continue;
+    const li = o.lane + 1, cl = climbable(o) ? 1 : 0;
+    if (li < 0 || li > 2) continue;
+    for (let k = 0; k <= PLAN_K + 1; k++) { const h = solidH(o, k * PLAN_DT); if (h > surf[li][k]) { surf[li][k] = h; climb[li][k] = cl; } }
+  }
+  return { surf, climb };
+}
+// durante a troca (0,25 s) a pista nova não pode ter parede (conta que, se estiver no alto, ele vai descendo)
+function sideFree(T, nl, k, y) {
+  for (let q = 1; q <= PLAN_CHANGE && k + q <= PLAN_K + 1; q++) if (T.surf[nl][k + q] - Math.max(0, y - 0.4 * q) > STEP) return false;
+  return true;
+}
+function planSearch(T, li, k, y, vy, cd, memo) {
+  if (k >= PLAN_K) return true;
+  const key = ((k * 3 + li) * 40 + Math.max(0, Math.min(39, Math.round(y * 8)))) * 64 * 8 + (Math.max(-31, Math.min(32, Math.round(vy / 2))) + 31) * 8 + cd;
+  if (memo.has(key)) return memo.get(key);
+  memo.set(key, false);
+  const opts = cd === 0 ? [li, li - 1, li + 1] : [li];
+  let ok = false;
+  for (const nl of opts) {
+    if (nl < 0 || nl > 2) continue;
+    const change = nl !== li, ncd = change ? PLAN_CHANGE : Math.max(0, cd - 1);
+    // troca de pista: a pista nova não pode ter parede durante a troca inteira
+    if (change && !sideFree(T, nl, k, y)) continue;
+    const h = T.surf[nl][k + 1];
+    let ny = y, nvy = vy;
+    if (h - y > STEP) { if (!(T.climb[nl][k + 1] && !change && cd === 0)) continue; ny = h; nvy = 0; } // parede (ou sobe a rampa)
+    else { nvy -= 38 * PLAN_DT; ny += nvy * PLAN_DT; if (ny <= h) { ny = h; nvy = 0; } }
+    if (planSearch(T, nl, k + 1, ny, nvy, ncd, memo)) { ok = true; break; }
+  }
+  memo.set(key, ok);
+  return ok;
+}
+// quais ações têm saída agora: ficar na pista, ir para a esquerda, ir para a direita
+function botPlan() {
+  const T = planTables(), li = S.lane + 1, changing = Math.abs(S.x - S.lane * LANE) > 0.25;
+  const y = S.y, vy = S.grounded ? 0 : S.vy, cd = changing ? 3 : 0;
+  const tryLane = nl => {
+    if (nl < 0 || nl > 2) return false;
+    if (nl === li) return planSearch(T, li, 0, y, vy, cd, new Map());
+    if (cd) return false;
+    return sideFree(T, nl, 0, y) && planSearch(T, nl, 0, y, vy, PLAN_CHANGE, new Map());
+  };
+  return { stay: tryLane(li), left: tryLane(li - 1), right: tryLane(li + 1) };
+}
+let PLAN = null, PLAN_T = -1;
+function plan() { if (!PLAN || S.t - PLAN_T >= 0.03) { PLAN = botPlan(); PLAN_T = S.t; } return PLAN; }
+const planOk = dir => dir > 0 ? plan().right : dir < 0 ? plan().left : plan().stay;
 const botAvoidsCoins = () => C.botCoins === false;
+// barreira chegando em menos de `t` segundos na pista em que ele está OU na pista em que o corpo ainda está
+// (no começo de uma troca de pista o corpo continua na pista antiga por um instante)
+function barrierSoon(t) {
+  const v = runSpeed(), lanes = new Set([S.lane, Math.round(S.x / LANE)]);
+  return S.objs.some(o => BARRIERS.includes(o.t) && !o.hit && lanes.has(o.lane) && o.z > PZ - 0.8 && (o.z - PZ) / v < t);
+}
 const coinNear = (lane, z0, z1) => S.objs.some(o => o.t === "coin" && Math.round(o.lane) === lane && o.z > z0 && o.z < z1);
 function botUpdate(dt) {
   if (!BOT.on || S.state !== "run") return;
@@ -687,7 +854,7 @@ function botUpdate(dt) {
   if (best !== pl) {
     const step = best > pl ? 1 : -1;
     // a pista escolhida é a mais segura; a do meio, se for só de passagem, precisa de folga só para a próxima troca
-    if (laneSafeToEnter(pl + step, 0.6)) return botPress(step > 0 ? "right" : "left");
+    if (laneSafeToEnter(pl + step, 0.6) && !barrierSoon(0.3) && planOk(step)) return botPress(step > 0 ? "right" : "left"); // não troca no meio de uma barreira
   }
   // 2) spam de teclas como uma pessoa apertando tudo: s d a w a d s a w… (só longe de qualquer perigo)
   const calm = frontDanger(pl) > 1.6 && !(barriersIn(pl)[0] && (barriersIn(pl)[0].z - PZ) / v < 1.4);
@@ -698,7 +865,7 @@ function botUpdate(dt) {
     if (key === "left" || key === "right") {
       // pista perigosa: a tecla "escorrega" (não troca de pista), mas o spam continua
       const nl = pl + (key === "right" ? 1 : -1);
-      if (nl >= -1 && nl <= 1 && !laneSafeToEnter(nl, 1.2)) { BOT.wait = spamGap(); return; }
+      if (nl >= -1 && nl <= 1 && (!laneSafeToEnter(nl, 1.2) || !planOk(nl - pl))) { BOT.wait = spamGap(); return; }
     }
     if (noCoins && (key === "down" || key === "up") && coinNear(pl, PZ - 1, PZ + v * 1.2)) { BOT.wait = spamGap(); return; } // pular/rolar perto de moeda pega moeda
     if (noCoins && (key === "left" || key === "right") && coinNear(pl + (key === "right" ? 1 : -1), PZ - 1, PZ + v * 0.8)) { BOT.wait = spamGap(); return; }
@@ -706,8 +873,8 @@ function botUpdate(dt) {
   }
   if (BOT.idle <= 0) { BOT.idle = spamGap(); return humanBurst(); }
 }
-// "custo" de moedas que o personagem vai pegar seguindo a altura y(t) nos próximos `horizon` segundos: a moeda passa
-// por PZ entre z = PZ + 0,5 e PZ − 1,1 e é pega se a altura do personagem + 0,8 ficar a menos de 1,6 dela.
+// "custo" de moedas que o personagem vai pegar seguindo a altura y(t) nos próximos `horizon` segundos (mesma área
+// de pegar moeda do jogo, COIN_HIT; o power-up continua com a área maior de antes).
 // O ímã custa muito mais: ele puxa todas as moedas por 12 s.
 function coinCost(yf, horizon) {
   const v = runSpeed(), pl = S.lane;
@@ -715,9 +882,10 @@ function coinCost(yf, horizon) {
   for (const o of S.objs) {
     const magnet = o.t === "power" && o.kind === "magnet", dbl = o.t === "power" && o.kind === "double";
     if (!(o.t === "coin" || magnet || dbl) || Math.round(o.lane) !== pl || o.z < PZ - 1.1) continue;
-    const t0 = Math.max(0, (o.z - PZ - 0.5) / v), t1 = (o.z - PZ + 1.1) / v;
+    const hz = o.t === "coin" ? COIN_HIT.z : 0.8, hy = (o.t === "coin" ? COIN_HIT.y : 1.6) + 0.15; // + margem
+    const t0 = Math.max(0, (o.z - PZ - hz) / v), t1 = (o.z - PZ + hz) / v;
     if (t0 > horizon) continue;
-    for (let t = t0; t <= t1; t += 0.01) if (Math.abs(o.y - (yf(t) + 0.8)) < 1.75) { cost += magnet ? 25 : dbl ? 8 : 1; break; } // 1,75 = 1,6 + margem
+    for (let t = t0; t <= t1; t += 0.01) if (Math.abs(o.y - (yf(t) + 0.8)) < hy) { cost += magnet ? 25 : dbl ? 8 : 1; break; }
   }
   return cost;
 }
@@ -740,17 +908,24 @@ function botAct(a) { act(S.reverseFx > 0 ? { left: "right", right: "left", up: "
 function botReflex() {
   const pl = S.lane, v = runSpeed();
   // 1) trem chegando de frente nesta pista: troca para a pista do lado que estiver livre
-  const d = frontDanger(pl);
+  const d = frontDanger(pl), P = plan();
+  if (!P.stay && (P.left || P.right) && !barrierSoon(0.15)) { // ficar aqui não tem saída: vai para o lado que tem
+    const dir = P.left && P.right ? (frontDanger(pl - 1, BOT_SIDE) > frontDanger(pl + 1, BOT_SIDE) ? -1 : 1) : P.left ? -1 : 1;
+    botAct(dir > 0 ? "right" : "left"); BOT.cool = 0.15; PLAN = null; return true;
+  }
   if (d < 0.85 && BOT.cool <= 0) { // (cool: não aperta duas trocas de pista seguidas sem querer)
-    const opts = [pl - 1, pl + 1].filter(l => laneSafeToEnter(l)).sort((a, b) => frontDanger(b, BOT_SIDE) - frontDanger(a, BOT_SIDE));
+    // se o plano diz que daqui tem saída, só foge para um lado que o plano também aprova
+    const opts = [pl - 1, pl + 1].filter(l => laneSafeToEnter(l) && (!P.stay || planOk(l - pl))).sort((a, b) => frontDanger(b, BOT_SIDE) - frontDanger(a, BOT_SIDE));
     if (opts.length && frontDanger(opts[0], BOT_SIDE) > d) { botAct(opts[0] > pl ? "right" : "left"); BOT.cool = 0.15; return true; }
   }
   // 2) barreira na pista: pula (cerca e barra) ou rola (barra e painel), com o atraso de reação de uma pessoa
-  const b = S.y < TRAIN_H - STEP && barriersIn(pl)[0];
+  const b = (S.y < TRAIN_H - STEP || !S.grounded) && barriersIn(pl)[0];
   if (b && b.z > PZ + 0.3) {
     const t = (b.z - PZ) / v;
     b.react = b.react || rnd(0.2, 0.34);
-    if (t < b.react) {
+    // caindo do alto: o mergulho (rolar no ar) leva um tempo até chegar no chão, então reage antes
+    const dvy = Math.min(S.grounded ? 0 : S.vy, DIVE_VY), dive = S.y > 0.6 ? (dvy + Math.sqrt(dvy * dvy + 76 * (S.y - 0.6))) / 38 : 0;
+    if (t < Math.max(b.react, b.t !== "low" && !S.grounded ? dive + 0.06 : 0)) {
       const canJump = S.grounded || S.jumps > 0, top = BAR_TOP[b.t] - STEP;
       const clears = yAt(t) >= top;                                      // já vai passar por cima sem fazer nada
       const rollOk = b.t !== "low" && S.roll > t + 0.05 && yAt(t) < 0.6; // já vai passar rolando
@@ -769,7 +944,7 @@ function botReflex() {
     }
   }
   // 3) sem moedas: pula na hora certa para passar por cima das moedas que vêm chegando
-  const barNear = barriersIn(pl).some(o => o.z > PZ - 0.5 && (o.z - PZ) / v < 0.9); // pulo de moeda não pode cair numa barreira
+  const barNear = barrierSoon(0.9); // pulo de moeda não pode cair numa barreira nem cancelar uma rolada
   if (botAvoidsCoins() && (S.grounded || S.jumps > 0) && !barNear && coinJumpNow()) { botAct("up"); return true; }
   return false;
 }
@@ -785,6 +960,7 @@ function crash() {
   react("shock", 1.6);
   S.crashes = (S.crashes || 0) + 1;
   if (infinite()) return gameOver();
+  S.chase.t = 1.6; // no modo meta o jacaré chega perto, mas ainda não pega
   S.dist = Math.max(0, S.dist - C.crashPenaltyMeters);
   S.speed = Math.max(C.startSpeed, S.speed * 0.8);
   S.invuln = 2; S.stumble = 0.6;
@@ -792,16 +968,16 @@ function crash() {
 }
 // esbarrão de lado: o 1º deixa meio tonto por alguns segundos (estrelinhas na cabeça e corre um pouco mais
 // devagar, mas continua correndo); esbarrar de novo ainda tonto = cai (igual a bater de frente)
-const DIZZY_SECS = 4, DIZZY_SLOW = 0.2; // 20% mais devagar, voltando ao normal no último segundo
+const DIZZY_SECS = 5, DIZZY_SLOW = 0.2; // 5 s, como o "stumble" do Subway; 20% mais devagar, voltando ao normal no último segundo
 function bump() {
   if (S.invuln > 0) return;
   if (S.dizzy > 0) { S.dizzy = 0; return crash(); }
-  S.dizzy = DIZZY_SECS;
+  S.dizzy = DIZZY_SECS; S.chase.t = DIZZY_SECS; // o jacaré cola atrás enquanto ele estiver tonto
 }
 // ---------- fim da run (modo infinito) ----------
 const continueCost = () => 2 ** S.continues; // 1, 2, 4, 8… cabeças de capivara na mesma run
 function gameOver() {
-  S.state = "over"; S.overT = 0; S.stumble = 0.6;
+  S.state = "over"; S.overT = 0; S.stumble = 0.6; S.chase.caught = 1; // o jacaré alcança e pega
   S.newBest = S.dist > SAVE.best;
   saveBest();
   Sound.stopMusic();
@@ -820,9 +996,18 @@ function continueRun() {
   SAVE.keys -= cost; store(); S.continues++;
   S.objs = S.objs.filter(o => !(["train", "ramp", ...BARRIERS].includes(o.t) && o.z < PZ + 45 && o.z + (o.d || 1) > PZ - 3));
   S.y = 0; S.vy = 0; S.floor = 0; S.camBase = 0; S.grounded = true; S.jumps = 1;
-  S.state = "run"; S.invuln = 3; S.stumble = 0; S.dizzy = 0;
+  S.state = "run"; S.invuln = 3; S.stumble = 0; S.dizzy = 0; S.chase.caught = 0; S.chase.t = 0;
   Sound.startMusic(); Sound.play("power");
   note(`CONTINUA! ${CAPY}`, `-${cost} ${cost === 1 ? "cabeça" : "cabeças"} de capivara`, "#ffd23f");
+}
+// ---------- jacaré perseguidor (no lugar do guarda do Subway) ----------
+// corre atrás do personagem: colado no começo da run e enquanto ele estiver tonto; na batida que acaba a run, pega
+function updateChaser(dt) {
+  const c = S.chase;
+  c.t = Math.max(0, c.t - dt);
+  const target = c.caught ? PZ - 1.8 : c.t > 0 ? PZ - 3.3 : -5;
+  c.z += (target - c.z) * Math.min(1, dt * (target > c.z ? 3 : 1.2));
+  c.x += (S.x - c.x) * Math.min(1, dt * (c.caught ? 10 : 5));
 }
 function sparkle(x, y, z, col, n) {
   const [sx, sy, s] = proj(x, y, z);
@@ -861,6 +1046,12 @@ function update(dt) {
   // ele estiver por perto, e segue o personagem quando ele cai abaixo dela (saiu do trem) ou sobe muito
   // acima dela. Pisar no topo de uma barreira não mexe a câmera (seria um tranco a cada barreira)
   S.camX += (S.x - S.camX) * Math.min(1, dt * 8);
+  if (S.state === "run") { // campo de visão: abre conforme acelera
+    const lvl = Math.max(0, Math.min(1, (S.speed - C.startSpeed) / Math.max(1, C.maxSpeed - C.startSpeed)));
+    const target = FOV_BASE + FOV_RUN * lvl + (S.speedFx > 0 ? FOV_BOOST : 0);
+    FOV += (target - FOV) * Math.min(1, dt * FOV_SMOOTH);
+  } else if (S.state === "menu") FOV += (FOV_BASE - FOV) * Math.min(1, dt * FOV_SMOOTH);
+  F = F0 * Math.tan(FOV_BASE * Math.PI / 360) / Math.tan(FOV * Math.PI / 360);
   if (S.state === "run") {
     if (S.grounded) S.camBase = floorAt(Math.round(S.x / LANE), S.y + STEP, false, true);
     else S.camBase = Math.max(S.y - 2.4, Math.min(S.camBase, S.y));
@@ -876,6 +1067,7 @@ function update(dt) {
   S.lookT = Math.max(0, S.lookT - dt);
   S.look += ((S.lookT ? S.lookDir : 0) - S.look) * Math.min(1, dt * 10);
   updateAmbient(dt, here);
+  if (S.state === "run" || S.state === "over") updateChaser(dt);
   if (S.state !== "run") return;
   botUpdate(dt);
   S.speed = Math.min(C.maxSpeed, S.speed + C.speedGainPerSec * dt);
@@ -904,7 +1096,8 @@ function update(dt) {
   // reta final (últimos 10%): música mais rápida para aumentar a tensão
   Sound.setTempo(S.speedFx > 0 ? 150 : (S.dist / C.goalMeters >= 0.9 ? 145 : 128) + (S.speed - C.startSpeed) * 0.6);
 
-  S.x += (S.lane * LANE - S.x) * Math.min(1, dt * 14);
+  // troca de pista: deslize com velocidade constante (como a curva linear do Subway), LANE_TIME por pista
+  { const dx = S.lane * LANE - S.x; S.x += Math.sign(dx) * Math.min(Math.abs(dx), LANE_SPEED * dt); }
   const pl = Math.round(S.x / LANE);
   // trem alto demais na frente/lado: nunca teletransporta para o teto (só se sobe pela rampa ou caindo de cima)
   const changing = S.prevLane !== undefined && S.prevLane !== pl && Math.abs(S.x - pl * LANE) > 0.25;
@@ -930,10 +1123,11 @@ function update(dt) {
   S.landT = Math.max(0, (S.landT || 0) - dt);
 
   for (const o of S.objs) {
-    const hitZ = o.z < PZ + 0.5 && o.z + (o.d || 0.6) > PZ - 0.5;
+    const hitZ = o.t === "coin" ? Math.abs(o.z - PZ) < COIN_HIT.z : o.z < PZ + 0.5 && o.z + (o.d || 0.6) > PZ - 0.5;
     if (o.t === "coin" || o.t === "power" || o.t === "key" || o.t === "letter") {
       if (S.magnet > 0 && o.t === "coin" && Math.abs(o.z - PZ) < 12) { o.lane += (S.x / LANE - o.lane) * 0.3; o.y += (S.y + 0.8 - o.y) * 0.3; }
-      if (hitZ && Math.abs(o.lane * LANE - S.x) < 1.2 && Math.abs(o.y - (S.y + 0.8)) < 1.6) {
+      const coin = o.t === "coin";
+      if (hitZ && Math.abs(o.lane * LANE - S.x) < (coin ? COIN_HIT.x : 1.2) && Math.abs(o.y - (S.y + 0.8)) < (coin ? COIN_HIT.y : 1.6)) {
         o.dead = true;
         if (o.t === "coin") { S.coins += S.double > 0 ? 2 : 1; Sound.play("coin"); sparkle(o.lane * LANE, o.y, PZ, "#ffe66b", 5); }
         else if (o.t === "key") { SAVE.keys++; store(); Sound.play("power"); note(`+1 ${CAPY}`, `você tem ${SAVE.keys} ${SAVE.keys === 1 ? "cabeça" : "cabeças"} de capivara`, "#ffd23f"); sparkle(o.lane * LANE, o.y, PZ, "#ffd23f", 14); }
@@ -1183,8 +1377,8 @@ function drawObj(o) {
     blink(x, 3.4, o.z);
   } else if (o.t === "coin") {
     if (o.z < 0.5) return;
-    const [cx, cy, s] = proj(x, o.y, o.z), spin = Math.sin(S.t * 5 + o.z), w = Math.abs(spin) * s * 0.34 + 1, h = s * 0.34;
-    g.fillStyle = "#c68a00"; g.beginPath(); g.ellipse(cx + (spin > 0 ? 1 : -1) * s * 0.03, cy, w, h, 0, 0, 7); g.fill();
+    const [cx, cy, s] = proj(x, o.y, o.z), spin = Math.sin(S.t * 5 + o.z), r = s * 0.34 * COIN_SIZE, w = Math.abs(spin) * r + 1, h = r;
+    g.fillStyle = "#c68a00"; g.beginPath(); g.ellipse(cx + (spin > 0 ? 1 : -1) * r * 0.09, cy, w, h, 0, 0, 7); g.fill();
     g.fillStyle = C.colors.coin; g.beginPath(); g.ellipse(cx, cy, w, h, 0, 0, 7); g.fill();
     g.fillStyle = "#fff1a8"; g.beginPath(); g.ellipse(cx, cy, w * 0.62, h * 0.62, 0, 0, 7); g.fill();
     g.fillStyle = C.colors.coin; g.beginPath(); g.ellipse(cx, cy, w * 0.45, h * 0.45, 0, 0, 7); g.fill();
@@ -1258,6 +1452,52 @@ function drawPlayer() {
 }
 
 // ---------- avatar com expressões (reage à live) ----------
+// jacaré de costas (ele vem entre a câmera e o personagem): rabo balançando, escamas nas costas, braços
+// esticados querendo pegar, olhos saltados no alto da cabeça, chapéu pontudo e capinha. Desenho original do jogo
+function drawChaser() {
+  const c = S.chase;
+  if (c.z < 0.9 || S.state === "menu") return;
+  const [px, py, ps] = proj(c.x, 0, c.z), s = ps * 0.95, t = S.t * (S.state === "run" ? 11 : 4);
+  const bob = Math.abs(Math.sin(t)) * s * 0.05, grab = c.caught ? Math.min(1, S.overT * 3) : 0;
+  const G = "#4f9a3e", GD = "#3a7a2d", GL = "#7cc35e", HAT = "#5a2f86", HATD = "#3f1f60", INK = "#1d2a16";
+  const o = (x, y, rx, ry, col, rot = 0) => { g.fillStyle = col; g.beginPath(); g.ellipse(x, y, Math.abs(rx), Math.abs(ry), rot, 0, 7); g.fill(); g.lineWidth = s * 0.02; g.strokeStyle = INK; g.stroke(); };
+  g.save();
+  ell(px, py, s * 0.5, s * 0.12, "rgba(0,0,0,.3)"); // sombra
+  const by = py - s * 0.55 - bob;
+  // rabo: vem na direção da câmera, balançando
+  const sw = Math.sin(t * 0.5) * s * 0.18;
+  g.fillStyle = GD; g.strokeStyle = INK; g.lineWidth = s * 0.02; g.beginPath();
+  g.moveTo(px - s * 0.16, by + s * 0.12); g.quadraticCurveTo(px + sw, by + s * 0.55, px + sw * 1.6, by + s * 0.78);
+  g.quadraticCurveTo(px + sw * 0.8, by + s * 0.5, px + s * 0.16, by + s * 0.12); g.closePath(); g.fill(); g.stroke();
+  // pernas correndo
+  for (const sg of [-1, 1]) { const k = Math.sin(t + (sg > 0 ? Math.PI : 0)); o(px + sg * s * 0.2, py - s * 0.13 + k * s * 0.05, s * 0.11, s * 0.15, G); }
+  // capinha roxa
+  g.fillStyle = HATD; g.beginPath(); g.moveTo(px - s * 0.3, by - s * 0.28);
+  g.quadraticCurveTo(px - s * 0.42 - sw * 0.3, by + s * 0.2, px - s * 0.25, by + s * 0.32);
+  g.lineTo(px + s * 0.25, by + s * 0.32); g.quadraticCurveTo(px + s * 0.42 - sw * 0.3, by + s * 0.2, px + s * 0.3, by - s * 0.28); g.closePath(); g.fill();
+  // corpo e escamas das costas
+  o(px, by, s * 0.32, s * 0.36, G);
+  for (let i = 0; i < 4; i++) { const yy = by - s * 0.22 + i * s * 0.14; g.fillStyle = GD; g.beginPath(); g.moveTo(px - s * 0.06, yy); g.lineTo(px, yy - s * 0.08); g.lineTo(px + s * 0.06, yy); g.closePath(); g.fill(); }
+  // braços esticados para a frente (para cima, na tela); na hora de pegar, fecham no personagem
+  for (const sg of [-1, 1]) {
+    const ax = px + sg * s * (0.36 - grab * 0.16), ay = by - s * (0.2 + grab * 0.25) + Math.sin(t + sg) * s * 0.04;
+    g.strokeStyle = INK; g.lineWidth = s * 0.13; g.lineCap = "round"; g.beginPath(); g.moveTo(px + sg * s * 0.24, by - s * 0.12); g.lineTo(ax, ay - s * 0.18); g.stroke();
+    g.strokeStyle = G; g.lineWidth = s * 0.09; g.beginPath(); g.moveTo(px + sg * s * 0.24, by - s * 0.12); g.lineTo(ax, ay - s * 0.18); g.stroke();
+    o(ax, ay - s * 0.2, s * 0.07, s * 0.06, GL);
+  }
+  g.lineCap = "butt";
+  // cabeça (de trás): achatada, com os olhos saltados em cima
+  const hy = by - s * 0.42;
+  o(px, hy, s * 0.24, s * 0.16, G);
+  for (const sg of [-1, 1]) { o(px + sg * s * 0.12, hy - s * 0.1, s * 0.07, s * 0.07, GL); ell(px + sg * s * 0.12, hy - s * 0.13, s * 0.04, s * 0.025, "#f4d03f"); }
+  // chapéu pontudo torto, com fivela
+  g.fillStyle = HAT; g.strokeStyle = INK; g.lineWidth = s * 0.02;
+  g.beginPath(); g.ellipse(px, hy - s * 0.12, s * 0.27, s * 0.06, 0, 0, 7); g.fill(); g.stroke();
+  g.beginPath(); g.moveTo(px - s * 0.15, hy - s * 0.14); g.quadraticCurveTo(px - s * 0.02, hy - s * 0.55, px + s * 0.2 + sw * 0.2, hy - s * 0.62);
+  g.quadraticCurveTo(px + s * 0.05, hy - s * 0.4, px + s * 0.15, hy - s * 0.14); g.closePath(); g.fill(); g.stroke();
+  g.fillStyle = "#f4d03f"; g.fillRect(px - s * 0.13, hy - s * 0.2, s * 0.26, s * 0.05);
+  g.restore();
+}
 function react(mood, secs) {
   S.mood = mood; S.moodT = secs;
   if (mood === "shock") { S.lookT = 0.8; S.lookDir = pick([-1, 1]); } // vira pra trás pra ver o que aconteceu
@@ -1861,6 +2101,7 @@ function render() {
   visible.filter(o => !inFront(o)).forEach(drawObj);
   drawPlayer();
   visible.filter(inFront).forEach(drawObj);
+  drawChaser();
   for (const p of S.amb) {
     g.save(); g.translate(p.x, p.y); g.rotate(p.rot); g.fillStyle = p.col;
     if (p.vx < -100) g.fillRect(-p.r * 4, 0, p.r * 8, p.r * 0.8); // grão de areia voando

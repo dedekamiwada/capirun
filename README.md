@@ -184,9 +184,10 @@ Tudo pode ser trocado no painel.
   - 🟨 painel alto amarelo e preto: **só rolando por baixo**.
   - Só perde metros quem bate **de frente**, baixo demais. Encostar no topo não conta como batida.
 - **Bater de frente** num trem ou numa barreira faz perder metros (configurável) e o personagem atravessa piscando. A prancha e o escudo protegem.
-- **Esbarrar de lado** (trocar de pista com um trem do lado) faz o personagem quicar de volta e ficar **meio tonto** por 4 s: estrelinhas girando na cabeça e correndo um pouco mais devagar, mas sem parar. **Esbarrar de novo ainda tonto derruba**, igual a bater de frente: no modo Meta perde metros, no Infinito acaba a run. Bater de frente derruba direto.
+- **🐊 O jacaré**: no lugar do guarda do Subway, um jacaré de chapéu pontudo roxo e capa corre atrás da capivara. Ele aparece no começo da run, chega perto quando você bate ou fica tonto e some quando você se recupera. Bateu de vez (fim da run no Infinito)? Ele alcança e agarra.
+- **Esbarrar de lado** (trocar de pista com um trem do lado) faz o personagem quicar de volta e ficar **meio tonto** por 5 s (o mesmo tempo do Subway): estrelinhas girando na cabeça e correndo um pouco mais devagar, mas sem parar. **Esbarrar de novo ainda tonto derruba**, igual a bater de frente: no modo Meta perde metros, no Infinito acaba a run. Bater de frente derruba direto.
 - Só dá para subir num trem **pela rampa** ou caindo de cima.
-- **Power-ups na pista**: 🛹 prancha, 🧲 ímã e 2X moedas. Os ativos aparecem na lateral direita, com uma barra mostrando o tempo que falta.
+- **Power-ups na pista**: 🛹 prancha, 🧲 ímã e 2X moedas (ímã e 2X duram 10 s, como no Subway). Os ativos aparecem na lateral direita, com uma barra mostrando o tempo que falta.
 - **Dois modos de jogo** (menu ou painel):
   - 🏁 **Meta**: chegar até a meta (100.000 m, configurável). Bater tira metros.
   - ♾️ **Infinito**: sem linha de chegada. **Bater acaba a run** e aparece a tela de fim com a pontuação, as moedas, o recorde, **Continuar** e **🔄 Jogar de novo**. Depois de alguns segundos começa outra run sozinha (o mesmo tempo da "nova partida após a vitória"). É um modo só do jogador: **presentes e likes não fazem nada**, e a tela mostra só o jogo (pontuação, moedas, cabeças de capivara, recorde, palavra do dia e power-ups), sem meta, Ajuda × Atrapalha, faixa de presentes, top da partida e avatar.
@@ -196,6 +197,10 @@ Tudo pode ser trocado no painel.
 - **Trens vindo na sua direção** buzinam antes de chegar.
 - **Pulo no ar**: um pulo por vez que o pé encosta em algo (chão, teto do trem ou topo de barreira). Caiu de um vagão sem ter pulado? Ainda dá para pular uma vez.
 - **Mapa em blocos**: a pista é montada com blocos pré-desenhados (`chunks.js`), sorteados e encaixados um depois do outro, às vezes espelhados. Todo bloco tem um caminho possível. Tem corredores de vagões, "segundo andar" pela rampa, escada de vagões, trens vindo na sua direção e combos do tipo troca de pista → pula → rola. Para não repetir: um bloco não volta antes de saírem outros 5, cada bloco vem com uma variação sorteada (pistas espelhadas ou em outra ordem, barreiras de outro tipo, moedas em outros lugares), e às vezes entra um trecho curto montado na hora. Toda variação passa por um verificador que confere se ainda dá para passar no ritmo de um jogador de verdade; se não der, ela é descartada.
+- **Moedas sempre em formação**, como no Subway: fileira de 5 no chão, arco de 7 por cima da cerca e da barra (seguindo a curva real do pulo: pulando na hora certa pega todas), fileira de 5 por baixo do painel e fileiras de 5 no teto dos vagões (subindo junto com a rampa). Nada de moeda solta, e nenhuma formação atravessa trem ou barreira. A moeda é "fina": dá para trocar de pista no vão entre duas sem pegar.
+- **Mais trens**: cada bloco aberto ganha vagões parados extras (às vezes com rampa) nas pistas vazias, sempre deixando um caminho pelo chão.
+- **Movimento com as proporções do Subway** (dados do jogo original, no ritmo do Capivara): a troca de pista desliza em velocidade constante (~0,2 s), a rolada dura ~0,46 s, rolar no ar puxa para baixo na mesma velocidade do pulo, e o jogo leva ~3 min para chegar na velocidade máxima.
+- **Câmera que abre com a velocidade**: quanto mais rápido, mais a visão abre (como o FOV do Subway); com o presente de acelerar ela abre mais um pouco.
 - **Dificuldade**: cresce com a velocidade. No começo só saem blocos fáceis; depois entram os médios e, com o jogo rápido, os difíceis. Bater deixa o jogo mais lento e os blocos voltam a ficar mais fáceis.
 - **Vitória**: ao chegar na meta, ou por um presente de vitória instantânea. Depois de alguns segundos começa outra partida sozinha (configurável).
 
@@ -255,6 +260,7 @@ Também dá para abrir o `index.html` direto no navegador para testar o jogo sem
 
 - **Novo país**: copie um bloco em `themes.js` e troque cores, `landmarks` e `props`.
 - **Novo personagem**: copie um bloco de `SKINS` em `characters.js` e combine cabeça, chapéu, roupa e acessórios.
+- **Moedas**: no começo do `game.js`, `COIN_GAP` é a distância entre uma moeda e outra na fileira (em metros, padrão 3,3), `COIN_SIZE` é o tamanho (1 = o antigo, padrão 1,35) e `COIN_HIT` é a área em que o personagem pega a moeda (pequena, para dar para passar no vão entre duas). `COIN_ROW` (padrão 5) é quantas moedas tem cada fileira.
 - **Palavras do dia**: a lista `WORDS` fica no começo do `game.js` (só letras sem acento).
 - **Novo bloco do mapa**: em `chunks.js`, copie um bloco e desenhe as linhas (a legenda está no topo do arquivo). A primeira linha é a mais longe. Garanta que sempre exista um caminho.
 - **Valores padrão**: `config.js` (o painel sobrepõe estes valores).
