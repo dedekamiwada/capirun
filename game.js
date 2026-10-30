@@ -162,13 +162,14 @@ function coinLine(lane, z, n, arc, base = 0, out = S.objs) {
 
 // ---------- blocos pré-desenhados (chunks.js) ----------
 // cada bloco vira uma lista de objetos; eles ficam numa fila e entram na pista quando chegam ao horizonte
-const CHUNKS = window.CHUNKS || [], CHUNK_STEP = 3.5, CHUNK_GAP = 4; // metros por linha · linhas de respiro entre blocos
+const CHUNKS = window.CHUNKS || [], CHUNK_STEP = 3.5; // metros por linha
 const BAR_CHAR = { L: "low", B: "mid", H: "high" };
-function buildChunk(ch, z0, k, mirror) {
-  const rows = ch.rows.slice().reverse(), out = []; // linha 0 = a mais perto
+// rows: as linhas já na ordem de perto para longe (linha 0 = a mais perto)
+function buildChunk(rows, z0, k) {
+  const out = [];
   const zr = i => z0 + i * CHUNK_STEP * k;
   for (let li = 0; li < 3; li++) {
-    const lane = (li - 1) * (mirror ? -1 : 1), col = rows.map(r => r[li] || ".");
+    const lane = li - 1, col = rows.map(r => r[li] || ".");
     for (let i = 0; i < col.length; i++) {
       const c = col[i];
       if ("RTtM".includes(c)) {
@@ -194,25 +195,96 @@ function buildChunk(ch, z0, k, mirror) {
   }
   return out;
 }
-// sorteia o próximo bloco: a dificuldade acompanha a velocidade (bate → fica mais lento → blocos mais fáceis)
+// ---------- variedade: o mesmo bloco nunca vem igual ----------
+// tem caminho? Vindo de qualquer pista, sempre dá para passar, no ritmo de um jogador de verdade: uma troca de
+// pista leva quase duas linhas (então entre uma troca e outra passam pelo menos duas linhas inteiras) e a pista nova
+// não pode ter vagão do lado durante a troca. Subir num vagão só pela rampa; do teto, dá para andar de teto em teto
+function chunkPassable(rows) {
+  rows = ["...", "...", "...", "...", ...rows]; // o respiro antes do bloco (no mínimo 4 linhas livres)
+  const n = rows.length, kind = (i, l) => i < 0 || i >= n ? "" : "TtM".includes(rows[i][l]) ? "T" : rows[i][l] === "R" ? "R" : "";
+  for (let start = 0; start < 3; start++) {
+    let st = new Set([start * 8]); // estado = pista * 8 + teto * 4 + linhas que faltam para poder trocar de novo (0 a 2)
+    for (let i = 0; i < n && st.size; i++) {
+      const nx = new Set();
+      for (const s0 of st) {
+        const l = s0 >> 3, roof = (s0 >> 2) & 1, busy = s0 & 3;
+        for (const nl of [l - 1, l, l + 1]) {
+          if (nl < 0 || nl > 2) continue;
+          const change = nl !== l;
+          if (change && (busy || (!roof && (kind(i - 1, nl) === "T" || kind(i, nl) === "T" && kind(i, l) !== "T")))) continue;
+          const wait = change ? 2 : Math.max(0, busy - 1);
+          if (kind(i, nl) === "T") { if (roof || (!change && kind(i - 1, l) === "R")) nx.add(nl * 8 + 4 + wait); }
+          else nx.add(nl * 8 + wait);
+        }
+      }
+      st = nx;
+    }
+    if (!st.size) return false;
+  }
+  return true;
+}
+// sorteia uma variação do bloco: pistas em outra ordem, barreiras de outro tipo e moedas em outros lugares.
+// Só vale a variação que ainda tem caminho; se nenhuma tiver, usa o bloco original (que sempre tem)
+const LANE_ORDERS = [[0, 1, 2], [2, 1, 0], [1, 0, 2], [0, 2, 1], [2, 0, 1], [1, 2, 0]];
+const BAR_SWAP = { L: "LB", B: "BLH", H: "HB", l: "lb", b: "bl", h: "hb" }; // tipos que podem trocar entre si
+function varyChunk(ch) {
+  const base = ch.rows.slice().reverse(); // de perto para longe
+  // bloco com parede de vagões (2+ numa linha) ou trem vindo: só espelha (trocar a ordem das pistas podia
+  // deixar a única saída num canto, a duas pistas de distância, com o trem chegando)
+  const tight = base.some(r => (r.match(/[TtM]/g) || []).length >= 2 || r.includes("M"));
+  const orders = tight ? LANE_ORDERS.slice(0, 2) : LANE_ORDERS;
+  for (let tries = 0; tries < 8; tries++) {
+    const ord = tries < 6 ? pick(orders) : tries === 6 ? [2, 1, 0] : [0, 1, 2];
+    const moving = [0, 1, 2].map(li => base.some(r => r[ord[li]] === "M")); // pista com trem vindo: nada de moeda nova
+    const rows = base.map(r => ord.map((src, li) => {
+      let c = r[src] || ".";
+      if (BAR_SWAP[c] && Math.random() < 0.4) c = pick(BAR_SWAP[c]);
+      else if (c === "c" && Math.random() < 0.25) c = ".";                                 // tira umas moedas…
+      else if (c === "." && !moving[li] && Math.random() < 0.05) c = "c";                  // …e põe outras
+      return c;
+    }).join(""));
+    if (chunkPassable(rows)) return rows;
+  }
+  return base;
+}
+// trecho curto montado na hora entre os blocos: uma ou duas barreiras soltas e moedas (sempre tem caminho)
+function fillerRows() {
+  const n = 5 + Math.floor(Math.random() * 5), rows = Array.from({ length: n }, () => [".", ".", "."]);
+  rows[1][Math.floor(Math.random() * 3)] = pick(["L", "B", "H", "l", "b"]);
+  if (n >= 8 && Math.random() < 0.5) rows[6][Math.floor(Math.random() * 3)] = pick(["L", "B", "H"]); // 2ª barreira, com folga
+  const cl = Math.floor(Math.random() * 3), c0 = Math.floor(Math.random() * Math.max(1, n - 3));
+  for (let i = c0; i < Math.min(n, c0 + 3); i++) if (rows[i][cl] === ".") rows[i][cl] = "c";
+  return rows.map(r => r.join(""));
+}
+// sorteia o próximo bloco: a dificuldade acompanha a velocidade (bate → fica mais lento → blocos mais fáceis).
+// Os últimos blocos que saíram não voltam logo, e de vez em quando entra um trecho curto montado na hora
 function spawnChunk() {
   const lvl = Math.max(0, Math.min(1, (S.speed - C.startSpeed) / Math.max(1, C.maxSpeed - C.startSpeed)));
-  const maxTier = lvl < 0.15 ? 0 : lvl < 0.45 ? 1 : 2;
+  const maxTier = lvl < 0.1 ? 0 : lvl < 0.4 ? 1 : 2;
   // mais rápido = blocos esticam, mas um pouco menos que a velocidade (o tempo entre obstáculos encurta)
   const k = 1 + (Math.max(C.startSpeed, S.speed) / C.startSpeed - 1) * 0.75;
-  let pool = CHUNKS.filter(c => c.tier <= maxTier && c !== S.lastChunk);
-  if (!pool.length) pool = CHUNKS.filter(c => c.tier <= maxTier);
-  if (!pool.length) { S.nextSpawn = 30; return; }
-  const weight = c => c.tier === maxTier ? 2 : 1; // blocos do nível atual aparecem mais
-  let r = Math.random() * pool.reduce((a, c) => a + weight(c), 0), ch = pool[0];
-  for (const c of pool) { r -= weight(c); if (r <= 0) { ch = c; break; } }
-  S.lastChunk = ch;
-  const items = buildChunk(ch, FAR + 1, k, Math.random() < 0.5);
+  const recent = S.recentChunks || (S.recentChunks = []);
+  const all = CHUNKS.filter(c => c.tier <= maxTier);
+  if (!all.length) { S.nextSpawn = 30; return; }
+  let rows, name;
+  if (recent.length && Math.random() < 0.2) { rows = fillerRows(); name = "trecho sorteado"; }
+  else {
+    const keep = Math.min(5, all.length - 1); // quantos blocos recentes ficam de fora
+    const pool = all.filter(c => !recent.slice(-keep).includes(c.name));
+    const weight = c => c.tier === maxTier ? 2 : 1; // blocos do nível atual aparecem mais
+    let r = Math.random() * pool.reduce((a, c) => a + weight(c), 0), ch = pool[0];
+    for (const c of pool) { r -= weight(c); if (r <= 0) { ch = c; break; } }
+    rows = varyChunk(ch); name = ch.name;
+    recent.push(ch.name); if (recent.length > 8) recent.shift();
+    S.lastChunk = ch;
+  }
+  const items = buildChunk(rows, FAR + 1, k);
+  for (const o of items) o.blk = name; // de qual bloco veio (para achar bloco com problema nos testes)
   if (!S.letterOut && S.letterCD <= 0 && !wordDone() && swapCoin(items, { t: "letter", ch: dayWord()[SAVE.word.n] })) S.letterOut = true;
   if (Math.random() < 0.03) swapCoin(items, { t: "key" }); // cabeça de capivara: rara (uma a cada minuto e meio, mais ou menos)
   S.queue.push(...items);
   S.queue.sort((a, b) => a.z - b.z);
-  S.nextSpawn = (ch.rows.length + CHUNK_GAP) * CHUNK_STEP * k;
+  S.nextSpawn = (rows.length + 4 + Math.floor(Math.random() * 3)) * CHUNK_STEP * k; // respiro de 4 a 6 linhas
 }
 // objetos da fila entram na pista ao chegar no horizonte. Um vagão em movimento é mais rápido que tudo,
 // então ele não pode alcançar o que está na frente dele na mesma pista antes daquilo sair da tela:
@@ -697,7 +769,8 @@ function botReflex() {
     }
   }
   // 3) sem moedas: pula na hora certa para passar por cima das moedas que vêm chegando
-  if (botAvoidsCoins() && (S.grounded || S.jumps > 0) && !(b && (b.z - PZ) / v < 0.9) && coinJumpNow()) { botAct("up"); return true; }
+  const barNear = barriersIn(pl).some(o => o.z > PZ - 0.5 && (o.z - PZ) / v < 0.9); // pulo de moeda não pode cair numa barreira
+  if (botAvoidsCoins() && (S.grounded || S.jumps > 0) && !barNear && coinJumpNow()) { botAct("up"); return true; }
   return false;
 }
 
@@ -837,13 +910,6 @@ function update(dt) {
   const changing = S.prevLane !== undefined && S.prevLane !== pl && Math.abs(S.x - pl * LANE) > 0.25;
   const wall = wallAt(pl, !changing);
   if (wall) {
-<<<<<<< Updated upstream
-    if (BOT.on) wall.passed = true;                       // bot atravessa sem penalidade
-    else if (changing && !wallAt(S.prevLane)) {           // bateu de lado trocando de pista: quica de volta
-      S.lane = S.prevLane; S.stumble = Math.max(S.stumble, 0.3);
-      Sound.play("lane"); react("shock", 0.8);
-    } else { crash(); wall.passed = true; }               // de frente: perde metros e atravessa piscando
-=======
     if (changing && !wallAt(S.prevLane)) {                // esbarrou de lado trocando de pista: quica de volta (o bot também)
       if (S.lane !== S.prevLane) {                         // (já voltando de um esbarrão: não conta de novo)
         S.lane = S.prevLane;
@@ -852,7 +918,6 @@ function update(dt) {
       }
     } else { crash(); wall.passed = true; }               // de frente: cai direto (perde metros ou acaba a run;
                                                           // com o bot, crash() não pune: é a rede de segurança)
->>>>>>> Stashed changes
   }
   S.floor = floorAt(Math.round(S.x / LANE), S.y + STEP, true, !changing);
   const wasGrounded = S.grounded;
